@@ -1,6 +1,8 @@
-#include <pipCore/Update/Ota.hpp>
+#include <PipCore/Update/Ota.hpp>
 
-#include <pipCore/Platforms/Select.hpp>
+#if PIPCORE_ENABLE_OTA
+
+#include <PipCore/Platforms/Select.hpp>
 
 namespace pipcore::ota
 {
@@ -122,3 +124,5 @@ namespace pipcore::ota
         return st;
     }
 }
+
+#endif

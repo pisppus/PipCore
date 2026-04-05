@@ -1,5 +1,9 @@
-#include <pipCore/Displays/ST7789/Display.hpp>
-#include <pipCore/Platform.hpp>
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_DISPLAY_ID(PIPCORE_DISPLAY) == PIPCORE_DISPLAY_TAG_ST7789
+
+#include <PipCore/Displays/ST7789/Display.hpp>
+#include <PipCore/Platform.hpp>
 #include <algorithm>
 #include <cstring>
 
@@ -146,3 +150,5 @@ namespace pipcore::st7789
         }
     }
 }
+
+#endif

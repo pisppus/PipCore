@@ -1,4 +1,8 @@
-#include <pipCore/Displays/ST7789/Driver.hpp>
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_DISPLAY_ID(PIPCORE_DISPLAY) == PIPCORE_DISPLAY_TAG_ST7789
+
+#include <PipCore/Displays/ST7789/Driver.hpp>
 #include <algorithm>
 
 namespace pipcore::st7789
@@ -444,3 +448,5 @@ namespace pipcore::st7789
         return flushTransport();
     }
 }
+
+#endif

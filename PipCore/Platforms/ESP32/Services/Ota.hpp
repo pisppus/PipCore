@@ -1,7 +1,7 @@
 #pragma once
 
-#include <pipCore/Platforms/ESP32/Services/Wifi.hpp>
-#include <pipCore/Update/Ota.hpp>
+#include <PipCore/Platforms/ESP32/Services/Wifi.hpp>
+#include <PipCore/Update/Ota.hpp>
 
 #include <HTTPClient.h>
 #include <Update.h>

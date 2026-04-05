@@ -1,7 +1,7 @@
 #pragma once
 
-#include <pipCore/Display.hpp>
-#include <pipCore/Displays/ILI9488/Driver.hpp>
+#include <PipCore/Display.hpp>
+#include <PipCore/Displays/ILI9488/Driver.hpp>
 
 namespace pipcore
 {

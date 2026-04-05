@@ -1,4 +1,4 @@
-#include <pipCore/Platforms/ESP32/Services/Core.hpp>
+#include <PipCore/Platforms/ESP32/Services/Core.hpp>
 
 #include <Arduino.h>
 #include <esp_heap_caps.h>

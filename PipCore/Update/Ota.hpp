@@ -1,5 +1,6 @@
 #pragma once
 
+#include <PipCore/Config/Features.hpp>
 #include <cstddef>
 #include <cstdint>
 
@@ -123,6 +124,7 @@ namespace pipcore::ota
         [[nodiscard]] virtual const Status &status() const noexcept = 0;
     };
 
+#if PIPCORE_ENABLE_OTA
     void markAppValid() noexcept;
 
     void configure(const Options &opt,
@@ -144,4 +146,27 @@ namespace pipcore::ota
     void service() noexcept;
 
     [[nodiscard]] const Status &status() noexcept;
+#else
+    void markAppValid() noexcept = delete;
+
+    void configure(const Options &opt,
+                   StatusCallback cb = nullptr,
+                   void *user = nullptr) noexcept = delete;
+
+    void requestCheck() noexcept = delete;
+    void requestCheck(CheckMode mode) noexcept = delete;
+
+    void requestInstall() noexcept = delete;
+
+    void requestStableList() noexcept = delete;
+    [[nodiscard]] bool stableListReady() noexcept = delete;
+    [[nodiscard]] uint8_t stableListCount() noexcept = delete;
+    [[nodiscard]] const char *stableListVersion(uint8_t idx) noexcept = delete;
+    void requestInstallStableVersion(const char *version) noexcept = delete;
+
+    void cancel() noexcept = delete;
+    void service() noexcept = delete;
+
+    [[nodiscard]] const Status &status() noexcept = delete;
+#endif
 }

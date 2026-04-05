@@ -1,4 +1,8 @@
-#include <pipCore/Displays/ILI9488/Driver.hpp>
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_DISPLAY_ID(PIPCORE_DISPLAY) == PIPCORE_DISPLAY_TAG_ILI9488
+
+#include <PipCore/Displays/ILI9488/Driver.hpp>
 #include <algorithm>
 
 namespace pipcore::ili9488
@@ -34,20 +38,34 @@ namespace pipcore::ili9488
     {
         switch (error)
         {
-        case IoError::None: return "ok";
-        case IoError::InvalidConfig: return "invalid config";
-        case IoError::NotReady: return "transport not ready";
-        case IoError::Gpio: return "gpio operation failed";
-        case IoError::SpiBusInit: return "spi bus init failed";
-        case IoError::SpiDeviceAdd: return "spi device add failed";
-        case IoError::DmaBufferAlloc: return "dma buffer alloc failed";
-        case IoError::TransactionAlloc: return "spi transaction alloc failed";
-        case IoError::CommandTransmit: return "spi command transmit failed";
-        case IoError::DataTransmit: return "spi data transmit failed";
-        case IoError::QueueTransmit: return "spi queue transmit failed";
-        case IoError::QueueResult: return "spi queue result failed";
-        case IoError::UnexpectedTransaction: return "unexpected spi transaction result";
-        default: return "unknown ili9488 io error";
+        case IoError::None:
+            return "ok";
+        case IoError::InvalidConfig:
+            return "invalid config";
+        case IoError::NotReady:
+            return "transport not ready";
+        case IoError::Gpio:
+            return "gpio operation failed";
+        case IoError::SpiBusInit:
+            return "spi bus init failed";
+        case IoError::SpiDeviceAdd:
+            return "spi device add failed";
+        case IoError::DmaBufferAlloc:
+            return "dma buffer alloc failed";
+        case IoError::TransactionAlloc:
+            return "spi transaction alloc failed";
+        case IoError::CommandTransmit:
+            return "spi command transmit failed";
+        case IoError::DataTransmit:
+            return "spi data transmit failed";
+        case IoError::QueueTransmit:
+            return "spi queue transmit failed";
+        case IoError::QueueResult:
+            return "spi queue result failed";
+        case IoError::UnexpectedTransaction:
+            return "unexpected spi transaction result";
+        default:
+            return "unknown ili9488 io error";
         }
     }
 
@@ -236,13 +254,10 @@ namespace pipcore::ili9488
             break;
         case 3:
             madctl = MadctlMX | MadctlMY | MadctlMV | order;
-            // Match the proven behavior of the legacy Pip3D ILI9488 driver:
-            // MADCTL uses MV for the physical panel orientation, but the
-            // logical render target remains configured as 480x320.
-            _width = _physWidth;
-            _height = _physHeight;
-            _xStart = _xOffsetCfg;
-            _yStart = _yOffsetCfg;
+            _width = _physHeight;
+            _height = _physWidth;
+            _xStart = _yOffsetCfg;
+            _yStart = _xOffsetCfg;
             break;
         default:
             _lastError = IoError::InvalidConfig;
@@ -281,34 +296,62 @@ namespace pipcore::ili9488
         }
 
         uint8_t buf[4];
-        if (!_transport->acquireBus())
+        const bool ownBus = !_transport->isBusAcquired();
+        if (ownBus && !_transport->acquireBus())
             return failFromTransport(IoError::QueueTransmit);
         if (!sendCommand(CmdCASET))
         {
-            _transport->releaseBus();
+            if (ownBus)
+                _transport->releaseBus();
             return false;
         }
         pack16BE(buf, static_cast<uint16_t>(xs32), static_cast<uint16_t>(xe32));
         if (!sendBytes(buf, 4))
         {
-            _transport->releaseBus();
+            if (ownBus)
+                _transport->releaseBus();
             return false;
         }
         if (!sendCommand(CmdPASET))
         {
-            _transport->releaseBus();
+            if (ownBus)
+                _transport->releaseBus();
             return false;
         }
         pack16BE(buf, static_cast<uint16_t>(ys32), static_cast<uint16_t>(ye32));
         if (!sendBytes(buf, 4))
         {
-            _transport->releaseBus();
+            if (ownBus)
+                _transport->releaseBus();
             return false;
         }
 
         const bool ok = sendCommand(CmdRAMWR);
-        _transport->releaseBus();
+        if (ownBus)
+            _transport->releaseBus();
         return ok;
+    }
+
+    bool Driver::beginWriteWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
+    {
+        if (!_transport)
+            return failFromTransport(IoError::NotReady);
+        const bool ownBus = !_transport->isBusAcquired();
+        if (ownBus && !_transport->acquireBus())
+            return failFromTransport(IoError::QueueTransmit);
+        if (setAddrWindow(x0, y0, x1, y1))
+            return true;
+        if (ownBus)
+            _transport->releaseBus();
+        return false;
+    }
+
+    void Driver::endWrite() noexcept
+    {
+        if (!_transport)
+            return;
+        (void)flushTransport();
+        _transport->releaseBus();
     }
 
     bool Driver::writePixels666(const uint8_t *bytes, size_t len)
@@ -328,7 +371,7 @@ namespace pipcore::ili9488
             _lastError = (_transport && _initialized) ? IoError::InvalidConfig : IoError::NotReady;
             return false;
         }
-        if (!setAddrWindow(0, 0, static_cast<uint16_t>(_width - 1U), static_cast<uint16_t>(_height - 1U)))
+        if (!beginWriteWindow(0, 0, static_cast<uint16_t>(_width - 1U), static_cast<uint16_t>(_height - 1U)))
             return false;
 
         constexpr size_t ChunkPixels = 128;
@@ -349,10 +392,16 @@ namespace pipcore::ili9488
         {
             const size_t pixels = std::min(remaining, ChunkPixels);
             if (!sendPixels(tmp, pixels * 3U))
+            {
+                endWrite();
                 return false;
+            }
             remaining -= pixels;
         }
 
-        return flushTransport();
+        endWrite();
+        return true;
     }
 }
+
+#endif

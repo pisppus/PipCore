@@ -1,7 +1,7 @@
 ﻿#pragma once
 
-#include <pipCore/Platform.hpp>
-#include <pipCore/Platforms/Select.hpp>
+#include <PipCore/Platform.hpp>
+#include <PipCore/Platforms/Select.hpp>
 #include <cstdint>
 
 namespace pipcore

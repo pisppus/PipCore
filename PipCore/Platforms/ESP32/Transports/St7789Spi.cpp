@@ -1,4 +1,8 @@
-#include <pipCore/Platforms/ESP32/Transports/St7789Spi.hpp>
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_DISPLAY_ID(PIPCORE_DISPLAY) == PIPCORE_DISPLAY_TAG_ST7789
+
+#include <PipCore/Platforms/ESP32/Transports/St7789Spi.hpp>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <string.h>
@@ -452,3 +456,5 @@ namespace pipcore::esp32
         return true;
     }
 }
+
+#endif

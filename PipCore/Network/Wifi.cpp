@@ -1,5 +1,8 @@
-#include <pipCore/Network/Wifi.hpp>
-#include <pipCore/Platforms/Select.hpp>
+#include <PipCore/Network/Wifi.hpp>
+
+#if PIPCORE_ENABLE_WIFI
+
+#include <PipCore/Platforms/Select.hpp>
 
 namespace pipcore::net
 {
@@ -60,3 +63,5 @@ namespace pipcore::net
         return 0;
     }
 }
+
+#endif

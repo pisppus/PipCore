@@ -1,5 +1,6 @@
 #pragma once
 
+#include <PipCore/Config/Features.hpp>
 #include <cstdint>
 
 namespace pipcore::net
@@ -41,6 +42,7 @@ namespace pipcore::net
         [[nodiscard]] virtual uint32_t localIpV4() const noexcept { return 0; }
     };
 
+#if PIPCORE_ENABLE_WIFI
     void wifiConfigure(const WifiConfig &cfg) noexcept;
     void wifiRequest(bool enabled) noexcept;
     void wifiService() noexcept;
@@ -48,4 +50,13 @@ namespace pipcore::net
     [[nodiscard]] WifiState wifiState() noexcept;
     [[nodiscard]] bool wifiConnected() noexcept;
     [[nodiscard]] uint32_t wifiLocalIpV4() noexcept;
+#else
+    void wifiConfigure(const WifiConfig &cfg) noexcept = delete;
+    void wifiRequest(bool enabled) noexcept = delete;
+    void wifiService() noexcept = delete;
+
+    [[nodiscard]] WifiState wifiState() noexcept = delete;
+    [[nodiscard]] bool wifiConnected() noexcept = delete;
+    [[nodiscard]] uint32_t wifiLocalIpV4() noexcept = delete;
+#endif
 }

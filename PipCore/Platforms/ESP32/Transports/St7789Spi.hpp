@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pipCore/Displays/ST7789/Driver.hpp>
+#include <PipCore/Displays/ST7789/Driver.hpp>
 
 #if !defined(ESP32)
 #error "pipcore::esp32::St7789Spi requires ESP32"

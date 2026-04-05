@@ -1,4 +1,8 @@
-#include <pipCore/Platforms/ESP32/Services/Prefs.hpp>
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_ENABLE_PREFS
+
+#include <PipCore/Platforms/ESP32/Services/Prefs.hpp>
 #include <algorithm>
 
 namespace pipcore::esp32::services
@@ -39,3 +43,5 @@ namespace pipcore::esp32::services
         return true;
     }
 }
+
+#endif

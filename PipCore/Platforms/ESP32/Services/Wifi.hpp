@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pipCore/Network/Wifi.hpp>
+#include <PipCore/Network/Wifi.hpp>
 
 namespace pipcore::esp32::services
 {
