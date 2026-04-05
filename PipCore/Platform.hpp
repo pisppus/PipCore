@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pipCore/Display.hpp>
+#include <PipCore/Display.hpp>
 #include <cstdint>
 #include <cstddef>
 

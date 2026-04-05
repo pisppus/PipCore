@@ -1,6 +1,6 @@
-﻿#include <pipCore/Graphics/Sprite.hpp>
-#include <pipCore/Display.hpp>
-#include <pipCore/Platform.hpp>
+﻿#include <PipCore/Graphics/Sprite.hpp>
+#include <PipCore/Display.hpp>
+#include <PipCore/Platform.hpp>
 #include <cstring>
 #include <algorithm>
 

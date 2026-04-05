@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pipCore/Platforms/ESP32/Services/Ota.hpp>
+#include <PipCore/Platforms/ESP32/Services/Ota.hpp>
 
 #include <Preferences.h>
 #include <sodium.h>

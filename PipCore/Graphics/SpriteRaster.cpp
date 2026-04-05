@@ -1,5 +1,5 @@
-﻿#include <pipCore/Graphics/Sprite.hpp>
-#include <pipCore/Display.hpp>
+﻿#include <PipCore/Graphics/Sprite.hpp>
+#include <PipCore/Display.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <cmath>

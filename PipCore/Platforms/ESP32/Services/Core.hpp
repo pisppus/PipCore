@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pipCore/Platform.hpp>
+#include <PipCore/Platform.hpp>
 
 namespace pipcore::esp32::services
 {

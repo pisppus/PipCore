@@ -37,8 +37,12 @@ namespace pipcore::ili9488
         [[nodiscard]] virtual bool write(const void *data, size_t len) = 0;
         [[nodiscard]] virtual bool writeCommand(uint8_t cmd) = 0;
         [[nodiscard]] virtual bool writePixels(const void *data, size_t len) = 0;
+        [[nodiscard]] virtual bool supportsDirectPixels() const noexcept = 0;
+        [[nodiscard]] virtual uint8_t *directPixelsBuffer(size_t &capacity) = 0;
+        [[nodiscard]] virtual bool submitDirectPixels(size_t len) = 0;
         [[nodiscard]] virtual bool acquireBus() = 0;
         virtual void releaseBus() = 0;
+        [[nodiscard]] virtual bool isBusAcquired() const noexcept = 0;
         [[nodiscard]] virtual bool flush() = 0;
         [[nodiscard]] virtual bool useDma() const noexcept = 0;
         [[nodiscard]] virtual size_t preferredChunkBytes() const noexcept = 0;
@@ -71,7 +75,12 @@ namespace pipcore::ili9488
         [[nodiscard]] size_t preferredChunkBytes() const noexcept { return _transport ? _transport->preferredChunkBytes() : 0U; }
 
         [[nodiscard]] bool setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
+        [[nodiscard]] bool beginWriteWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
+        void endWrite() noexcept;
         [[nodiscard]] bool writePixels666(const uint8_t *bytes, size_t len);
+        [[nodiscard]] bool supportsDirectPixels() const noexcept { return _transport && _transport->supportsDirectPixels(); }
+        [[nodiscard]] uint8_t *directPixelsBuffer(size_t &capacity) { return _transport ? _transport->directPixelsBuffer(capacity) : nullptr; }
+        [[nodiscard]] bool submitDirectPixels(size_t len) { return _transport && _transport->submitDirectPixels(len); }
         [[nodiscard]] bool fillScreen565(uint16_t color565);
 
     private:

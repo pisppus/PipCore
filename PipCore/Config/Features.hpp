@@ -1,0 +1,40 @@
+#pragma once
+
+#if __has_include(<config.hpp>)
+#include <config.hpp>
+#endif
+
+#define PIPCORE_PP_CAT_IMPL(a, b) a##b
+#define PIPCORE_PP_CAT(a, b) PIPCORE_PP_CAT_IMPL(a, b)
+
+#ifndef PIPCORE_PLATFORM
+#define PIPCORE_PLATFORM ESP32
+#endif
+
+#ifndef PIPCORE_DISPLAY
+#define PIPCORE_DISPLAY ST7789
+#endif
+
+#define PIPCORE_DISPLAY_TAG_ST7789 1
+#define PIPCORE_DISPLAY_TAG_ILI9488 2
+#define PIPCORE_DISPLAY_ID(name) PIPCORE_PP_CAT(PIPCORE_DISPLAY_TAG_, name)
+
+#ifndef PIPCORE_ENABLE_PREFS
+#define PIPCORE_ENABLE_PREFS 0
+#endif
+
+#ifndef PIPCORE_ENABLE_WIFI
+#define PIPCORE_ENABLE_WIFI 0
+#endif
+
+#ifndef PIPCORE_ENABLE_OTA
+#define PIPCORE_ENABLE_OTA 0
+#endif
+
+#ifndef PIPCORE_OTA_PROJECT_URL
+#define PIPCORE_OTA_PROJECT_URL ""
+#endif
+
+#if PIPCORE_ENABLE_OTA && !PIPCORE_ENABLE_WIFI
+#error "PIPCORE_ENABLE_OTA requires PIPCORE_ENABLE_WIFI"
+#endif

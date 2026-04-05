@@ -1,4 +1,8 @@
-#include <pipCore/Platforms/ESP32/Services/Wifi.hpp>
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_ENABLE_WIFI
+
+#include <PipCore/Platforms/ESP32/Services/Wifi.hpp>
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -161,3 +165,5 @@ namespace pipcore::esp32::services
         }
     }
 }
+
+#endif

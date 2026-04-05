@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pipCore/Displays/ILI9488/Driver.hpp>
+#include <PipCore/Displays/ILI9488/Driver.hpp>
 
 #if !defined(ESP32)
 #error "pipcore::esp32::Ili9488Spi requires ESP32"
@@ -16,7 +16,7 @@ namespace pipcore::esp32
         Ili9488Spi() = default;
         ~Ili9488Spi();
 
-        void configure(int8_t mosi, int8_t sclk, int8_t cs, int8_t dc, int8_t rst, uint32_t hz = 80000000U) noexcept;
+        void configure(int8_t mosi, int8_t sclk, int8_t cs, int8_t dc, int8_t rst, uint32_t hz = 60000000U) noexcept;
 
         [[nodiscard]] bool init() override;
         void deinit() override;
@@ -27,8 +27,12 @@ namespace pipcore::esp32
         [[nodiscard]] bool write(const void *data, size_t len) override;
         [[nodiscard]] bool writeCommand(uint8_t cmd) override;
         [[nodiscard]] bool writePixels(const void *data, size_t len) override;
+        [[nodiscard]] bool supportsDirectPixels() const noexcept override { return _useDma; }
+        [[nodiscard]] uint8_t *directPixelsBuffer(size_t &capacity) override;
+        [[nodiscard]] bool submitDirectPixels(size_t len) override;
         [[nodiscard]] bool acquireBus() override;
         void releaseBus() override;
+        [[nodiscard]] bool isBusAcquired() const noexcept override { return _busAcquired; }
         [[nodiscard]] bool flush() override;
         [[nodiscard]] bool useDma() const noexcept override { return _useDma; }
         [[nodiscard]] size_t preferredChunkBytes() const noexcept override { return _useDma ? DmaChunkBytes : PollChunkBytes; }
@@ -44,17 +48,15 @@ namespace pipcore::esp32
         [[nodiscard]] inline bool setCsCached(int level);
 
     private:
-        static constexpr uint32_t DmaSafeHz = 60000000U;
-        static constexpr uint32_t PollSafeHz = 40000000U;
-        static constexpr size_t DmaChunkBytes = 1536U;
-        static constexpr size_t PollChunkBytes = 60U;
+        static constexpr size_t DmaChunkBytes = 2304U;
+        static constexpr size_t PollChunkBytes = 96U;
 
         int8_t _pinMosi = -1;
         int8_t _pinSclk = -1;
         int8_t _pinCs = -1;
         int8_t _pinDc = -1;
         int8_t _pinRst = -1;
-        uint32_t _hz = 80000000U;
+        uint32_t _hz = 60000000U;
         uint32_t _effectiveHz = 0U;
 
         void *_spiHandle = nullptr;

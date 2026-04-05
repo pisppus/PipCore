@@ -1,4 +1,8 @@
-#include <pipCore/Platforms/ESP32/Transports/Ili9488Spi.hpp>
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_DISPLAY_ID(PIPCORE_DISPLAY) == PIPCORE_DISPLAY_TAG_ILI9488
+
+#include <PipCore/Platforms/ESP32/Transports/Ili9488Spi.hpp>
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
 #include <esp_heap_caps.h>
@@ -55,7 +59,7 @@ namespace pipcore::esp32
         _pinCs = cs >= 0 ? cs : getSpi2IomuxCs0();
         _pinDc = dc;
         _pinRst = rst;
-        _hz = hz ? hz : 80000000U;
+        _hz = hz ? hz : 60000000U;
         _effectiveHz = 0U;
         _spiHandle = nullptr;
         _dmaBuf[0] = nullptr;
@@ -176,7 +180,7 @@ namespace pipcore::esp32
 
         spi_device_interface_config_t dev{};
         dev.mode = 0;
-        dev.clock_speed_hz = static_cast<int>(std::min(_hz, DmaSafeHz));
+        dev.clock_speed_hz = static_cast<int>(_hz);
         dev.spics_io_num = -1;
         dev.queue_size = 2;
         dev.flags = SPI_DEVICE_NO_DUMMY | SPI_DEVICE_HALFDUPLEX;
@@ -220,7 +224,7 @@ namespace pipcore::esp32
 
         spi_device_interface_config_t dev{};
         dev.mode = 0;
-        dev.clock_speed_hz = static_cast<int>(std::min(_hz, PollSafeHz));
+        dev.clock_speed_hz = static_cast<int>(_hz);
         dev.spics_io_num = -1;
         dev.queue_size = 1;
         dev.flags = SPI_DEVICE_NO_DUMMY | SPI_DEVICE_HALFDUPLEX;
@@ -283,11 +287,15 @@ namespace pipcore::esp32
             return fail(ili9488::IoError::NotReady);
         if (!flushQueued())
             return false;
+        const bool ownBus = !_busAcquired;
+        if (ownBus && !acquireBus())
+            return false;
         if (!setCsCached(0))
             return false;
         if (!setDcCached(0))
         {
-            (void)setCsCached(1);
+            if (ownBus)
+                releaseBus();
             return false;
         }
 
@@ -297,11 +305,12 @@ namespace pipcore::esp32
         t.tx_data[0] = cmd;
         if (spi_device_polling_transmit(static_cast<spi_device_handle_t>(_spiHandle), &t) != ESP_OK)
         {
-            (void)setCsCached(1);
+            if (ownBus)
+                releaseBus();
             return fail(ili9488::IoError::CommandTransmit);
         }
-        if (!_busAcquired)
-            (void)setCsCached(1);
+        if (ownBus)
+            releaseBus();
         return true;
     }
 
@@ -311,11 +320,15 @@ namespace pipcore::esp32
             return fail(ili9488::IoError::NotReady);
         if (!flushQueued())
             return false;
+        const bool ownBus = !_busAcquired;
+        if (ownBus && !acquireBus())
+            return false;
         if (!setCsCached(0))
             return false;
         if (!setDcCached(1))
         {
-            (void)setCsCached(1);
+            if (ownBus)
+                releaseBus();
             return false;
         }
 
@@ -333,11 +346,12 @@ namespace pipcore::esp32
         }
         if (spi_device_polling_transmit(static_cast<spi_device_handle_t>(_spiHandle), &t) != ESP_OK)
         {
-            (void)setCsCached(1);
+            if (ownBus)
+                releaseBus();
             return fail(ili9488::IoError::DataTransmit);
         }
-        if (!_busAcquired)
-            (void)setCsCached(1);
+        if (ownBus)
+            releaseBus();
         return true;
     }
 
@@ -366,11 +380,12 @@ namespace pipcore::esp32
     {
         if (!len || !_spiHandle)
             return fail(ili9488::IoError::NotReady);
+        const bool ownBus = !_busAcquired;
         if (!setCsCached(0))
             return false;
         if (!setDcCached(1))
             return false;
-        if (!acquireBus())
+        if (ownBus && !acquireBus())
             return false;
 
         if (!_useDma)
@@ -380,16 +395,19 @@ namespace pipcore::esp32
             t.tx_buffer = data;
             if (spi_device_polling_transmit(static_cast<spi_device_handle_t>(_spiHandle), &t) != ESP_OK)
             {
-                releaseBus();
+                if (ownBus)
+                    releaseBus();
                 return fail(ili9488::IoError::DataTransmit);
             }
-            releaseBus();
+            if (ownBus)
+                releaseBus();
             return true;
         }
 
         if (!_dmaBuf[0] || !_dmaBuf[1] || !_trans[0] || !_trans[1])
         {
-            releaseBus();
+            if (ownBus)
+                releaseBus();
             return fail(ili9488::IoError::NotReady);
         }
 
@@ -402,7 +420,8 @@ namespace pipcore::esp32
             {
                 if (!waitQueued())
                 {
-                    releaseBus();
+                    if (ownBus)
+                        releaseBus();
                     return false;
                 }
             }
@@ -423,7 +442,8 @@ namespace pipcore::esp32
             {
                 _transInFlight[slot] = false;
                 (void)flushQueued();
-                releaseBus();
+                if (ownBus)
+                    releaseBus();
                 return fail(ili9488::IoError::QueueTransmit);
             }
 
@@ -432,6 +452,60 @@ namespace pipcore::esp32
             p += n;
             remaining -= n;
         }
+        return true;
+    }
+
+    uint8_t *Ili9488Spi::directPixelsBuffer(size_t &capacity)
+    {
+        capacity = 0;
+        if (!_useDma || !_spiHandle || !_dmaBuf[0] || !_dmaBuf[1] || !_trans[0] || !_trans[1])
+            return nullptr;
+
+        while (_transInFlight[_dmaNext])
+        {
+            if (!waitQueued())
+                return nullptr;
+        }
+
+        capacity = DmaChunkBytes;
+        return _dmaBuf[_dmaNext];
+    }
+
+    bool Ili9488Spi::submitDirectPixels(size_t len)
+    {
+        if (!len || len > DmaChunkBytes || !_useDma || !_spiHandle)
+            return fail(ili9488::IoError::NotReady);
+        if (!setCsCached(0))
+            return false;
+        if (!setDcCached(1))
+            return false;
+        if (!acquireBus())
+            return false;
+
+        while (_transInFlight[_dmaNext])
+        {
+            if (!waitQueued())
+                return false;
+        }
+
+        const int slot = _dmaNext;
+        _dmaNext ^= 1;
+
+        spi_transaction_t *t = _trans[slot];
+        memset(t, 0, sizeof(*t));
+        t->flags = SPI_TRANS_CS_KEEP_ACTIVE;
+        t->length = static_cast<int>(len * 8U);
+        t->tx_buffer = _dmaBuf[slot];
+
+        const esp_err_t err = spi_device_queue_trans(static_cast<spi_device_handle_t>(_spiHandle), t, portMAX_DELAY);
+        if (err != ESP_OK)
+        {
+            _transInFlight[slot] = false;
+            return fail(ili9488::IoError::QueueTransmit);
+        }
+
+        _transInFlight[slot] = true;
+        ++_dmaInflight;
         return true;
     }
 
@@ -483,3 +557,5 @@ namespace pipcore::esp32
         return true;
     }
 }
+
+#endif

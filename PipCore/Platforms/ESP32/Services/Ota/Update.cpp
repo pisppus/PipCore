@@ -1,4 +1,8 @@
-#include <pipCore/Platforms/ESP32/Services/Ota/Internal.hpp>
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_ENABLE_OTA
+
+#include <PipCore/Platforms/ESP32/Services/Ota/Internal.hpp>
 
 #include <Arduino.h>
 #include <esp_ota_ops.h>
@@ -174,3 +178,5 @@ namespace pipcore::esp32::services
         return true;
     }
 }
+
+#endif

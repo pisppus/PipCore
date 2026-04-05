@@ -1,5 +1,8 @@
-#include <pipCore/Platforms/ESP32/Services/Ota/Internal.hpp>
-#include <pipGUI/Core/Config/Select.hpp>
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_ENABLE_OTA
+
+#include <PipCore/Platforms/ESP32/Services/Ota/Internal.hpp>
 
 #include <Arduino.h>
 #include <esp_ota_ops.h>
@@ -44,7 +47,6 @@ namespace pipcore::esp32::services
             mbedtls_sha256_free(&_http.sha);
             _http.shaInit = false;
         }
-
     }
 
     void Ota::setError(pipcore::ota::Error e, uint32_t nowMs, int httpCode, int platformCode) noexcept
@@ -166,7 +168,7 @@ namespace pipcore::esp32::services
         _installStableVer[0] = '\0';
         resetOperationState();
 
-        if (!copyCString(PIPGUI_OTA_PROJECT_URL, _projectUrl, sizeof(_projectUrl)))
+        if (!copyCString(PIPCORE_OTA_PROJECT_URL, _projectUrl, sizeof(_projectUrl)))
         {
             setError(pipcore::ota::Error::UrlTooLong, static_cast<uint32_t>(millis()));
             return;
@@ -300,3 +302,5 @@ namespace pipcore::esp32::services
         return true;
     }
 }
+
+#endif

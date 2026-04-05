@@ -1,26 +1,48 @@
 #pragma once
 
-#include <pipCore/Platform.hpp>
+#include <PipCore/Config/Features.hpp>
+#include <PipCore/Platform.hpp>
 
 #if !defined(ESP32)
 #error "pipcore::esp32::Platform requires ESP32"
 #endif
 
-#include <pipCore/Displays/Select.hpp>
-#include <pipCore/Platforms/ESP32/Services/Core.hpp>
-#include <pipCore/Platforms/ESP32/Services/Prefs.hpp>
-#include <pipCore/Platforms/ESP32/Services/Wifi.hpp>
-#include <pipCore/Platforms/ESP32/Services/Ota.hpp>
-#include <pipCore/Platforms/ESP32/Transports/Select.hpp>
+#include <PipCore/Displays/Select.hpp>
+#include <PipCore/Platforms/ESP32/Services/Core.hpp>
+#if PIPCORE_ENABLE_PREFS
+#include <PipCore/Platforms/ESP32/Services/Prefs.hpp>
+#endif
+#if PIPCORE_ENABLE_WIFI
+#include <PipCore/Platforms/ESP32/Services/Wifi.hpp>
+#endif
+#if PIPCORE_ENABLE_OTA
+#include <PipCore/Platforms/ESP32/Services/Ota.hpp>
+#endif
+
+#if PIPCORE_DISPLAY_ID(PIPCORE_DISPLAY) == PIPCORE_DISPLAY_TAG_ST7789
+#include <PipCore/Platforms/ESP32/Transports/St7789Spi.hpp>
+#elif PIPCORE_DISPLAY_ID(PIPCORE_DISPLAY) == PIPCORE_DISPLAY_TAG_ILI9488
+#include <PipCore/Platforms/ESP32/Transports/Ili9488Spi.hpp>
+#else
+#error "Unsupported display transport for selected PIPCORE_DISPLAY"
+#endif
 
 namespace pipcore::esp32
 {
+#if PIPCORE_DISPLAY_ID(PIPCORE_DISPLAY) == PIPCORE_DISPLAY_TAG_ST7789
+    using SelectedDisplayTransport = St7789Spi;
+#elif PIPCORE_DISPLAY_ID(PIPCORE_DISPLAY) == PIPCORE_DISPLAY_TAG_ILI9488
+    using SelectedDisplayTransport = Ili9488Spi;
+#endif
+
     class Platform final : public pipcore::Platform
     {
     public:
         Platform()
         {
+#if PIPCORE_ENABLE_OTA
             _ota.bindWifi(&_wifi);
+#endif
         }
         ~Platform() override = default;
 
@@ -63,9 +85,15 @@ namespace pipcore::esp32
         services::Gpio _gpio;
         services::Backlight _backlight;
         services::Heap _heap;
+#if PIPCORE_ENABLE_PREFS
         services::Prefs _prefs;
+#endif
+#if PIPCORE_ENABLE_WIFI
         services::Wifi _wifi;
+#endif
+#if PIPCORE_ENABLE_OTA
         services::Ota _ota;
+#endif
         SelectedDisplayTransport _transport;
         SelectedDisplay _display;
         bool _displayConfigured = false;

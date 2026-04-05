@@ -1,4 +1,4 @@
-#include <pipCore/Platforms/ESP32/Platform.hpp>
+#include <PipCore/Platforms/ESP32/Platform.hpp>
 
 namespace pipcore::esp32
 {
@@ -24,6 +24,7 @@ namespace pipcore::esp32
 
     uint8_t Platform::loadMaxBrightnessPercent() noexcept
     {
+#if PIPCORE_ENABLE_PREFS
         uint8_t percent = 100;
         if (!_prefs.loadMaxBrightnessPercent(percent))
         {
@@ -32,15 +33,23 @@ namespace pipcore::esp32
         }
         _lastError = PlatformError::None;
         return percent;
+#else
+        _lastError = PlatformError::None;
+        return 100;
+#endif
     }
 
     void Platform::storeMaxBrightnessPercent(uint8_t percent) noexcept
     {
+#if PIPCORE_ENABLE_PREFS
         if (!_prefs.storeMaxBrightnessPercent(percent))
         {
             _lastError = PlatformError::PrefsOpenFailed;
             return;
         }
+#else
+        (void)percent;
+#endif
         _lastError = PlatformError::None;
     }
 
@@ -183,21 +192,37 @@ namespace pipcore::esp32
 
     pipcore::net::Backend *Platform::network() noexcept
     {
+#if PIPCORE_ENABLE_WIFI
         return &_wifi;
+#else
+        return nullptr;
+#endif
     }
 
     const pipcore::net::Backend *Platform::network() const noexcept
     {
+#if PIPCORE_ENABLE_WIFI
         return &_wifi;
+#else
+        return nullptr;
+#endif
     }
 
     pipcore::ota::Backend *Platform::update() noexcept
     {
+#if PIPCORE_ENABLE_OTA
         return &_ota;
+#else
+        return nullptr;
+#endif
     }
 
     const pipcore::ota::Backend *Platform::update() const noexcept
     {
+#if PIPCORE_ENABLE_OTA
         return &_ota;
+#else
+        return nullptr;
+#endif
     }
 }
