@@ -1,0 +1,25 @@
+{
+  "name": "PipCore",
+  "version": "0.0.1",
+  "build": {
+    "srcFilter": [
+      "+<Network/Wifi.cpp>",
+      "+<Update/Ota.cpp>",
+      "+<Displays/ST7789/Display.cpp>",
+      "+<Displays/ST7789/Driver.cpp>",
+      "+<Displays/ILI9488/Display.cpp>",
+      "+<Displays/ILI9488/Driver.cpp>",
+      "+<Platforms/ESP32/Platform.cpp>",
+      "+<Platforms/ESP32/Services/Core.cpp>",
+      "+<Platforms/ESP32/Services/Prefs.cpp>",
+      "+<Platforms/ESP32/Services/Wifi.cpp>",
+      "+<Platforms/ESP32/Services/Ota/Common.cpp>",
+      "+<Platforms/ESP32/Services/Ota/Http.cpp>",
+      "+<Platforms/ESP32/Services/Ota/Manifest.cpp>",
+      "+<Platforms/ESP32/Services/Ota/Service.cpp>",
+      "+<Platforms/ESP32/Services/Ota/Update.cpp>",
+      "+<Platforms/ESP32/Transports/St7789Spi.cpp>",
+      "+<Platforms/ESP32/Transports/Ili9488Spi.cpp>"
+    ]
+  }
+}
