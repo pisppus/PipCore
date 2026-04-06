@@ -1,5 +1,6 @@
 #pragma once
 
+#include <PipCore/Config/Features.hpp>
 #include <cstdint>
 #include <cstddef>
 
