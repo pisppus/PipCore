@@ -202,13 +202,13 @@ public:
     }
 };
 
-struct EspShim
+struct EspCompat
 {
     void restart() const noexcept {}
 };
 
 extern HardwareSerial Serial;
-extern EspShim ESP;
+extern EspCompat ESP;
 
 inline unsigned long millis()
 {
