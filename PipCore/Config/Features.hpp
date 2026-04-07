@@ -1,6 +1,8 @@
 #pragma once
 
-#if __has_include(<config.hpp>)
+#if __has_include(<config_sim.hpp>)
+#include <config_sim.hpp>
+#elif __has_include(<config.hpp>)
 #include <config.hpp>
 #endif
 

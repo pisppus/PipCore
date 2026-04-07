@@ -6,6 +6,14 @@
 
 namespace pipcore::desktop
 {
+    namespace
+    {
+        [[nodiscard]] constexpr uint8_t clampPercent(uint8_t percent) noexcept
+        {
+            return (percent > 100U) ? 100U : percent;
+        }
+    }
+
     uint32_t Platform::nowMs() noexcept
     {
         return Runtime::instance().nowMs();
@@ -28,12 +36,12 @@ namespace pipcore::desktop
 
     void Platform::storeMaxBrightnessPercent(uint8_t percent) noexcept
     {
-        _brightness = (percent > 100U) ? 100U : percent;
+        _brightness = clampPercent(percent);
     }
 
     void Platform::setBacklightPercent(uint8_t percent) noexcept
     {
-        _brightness = (percent > 100U) ? 100U : percent;
+        _brightness = clampPercent(percent);
         Runtime::instance().setBacklightPercent(_brightness);
     }
 
@@ -62,8 +70,8 @@ namespace pipcore::desktop
         if (!_configValid)
         {
             DisplayConfig fallback = {};
-            fallback.width = 320;
-            fallback.height = 240;
+            fallback.width = static_cast<uint16_t>(PIPGUI_SIM_DEFAULT_WIDTH);
+            fallback.height = static_cast<uint16_t>(PIPGUI_SIM_DEFAULT_HEIGHT);
             if (!configDisplay(fallback))
                 return false;
         }
