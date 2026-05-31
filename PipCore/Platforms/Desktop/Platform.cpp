@@ -1,4 +1,6 @@
-#if defined(_WIN32)
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_TARGET_DESKTOP
 
 #include <PipCore/Platforms/Desktop/Platform.hpp>
 #include <PipCore/Platforms/Desktop/Runtime.hpp>

@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <PipCore/Platforms/Desktop/Runtime.hpp>
+
+#if defined(_WIN32)
 #include <windows.h>
+#endif
 
 void setup();
 void loop();
@@ -22,10 +25,12 @@ namespace
     }
 }
 
+#if defined(_WIN32)
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 {
     return runSimulator();
 }
+#endif
 
 int main()
 {

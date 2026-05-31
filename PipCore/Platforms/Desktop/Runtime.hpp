@@ -1,12 +1,17 @@
 #pragma once
 
-#if defined(_WIN32)
+#include <PipCore/Config/Features.hpp>
 
+#if PIPCORE_TARGET_DESKTOP
+
+#if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #endif
 
 #include <PipCore/Platform.hpp>
@@ -14,10 +19,12 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include <windows.h>
 
 namespace pipcore::desktop
 {
+    class WxSimCanvas;
+    class WxSimFrame;
+
     class Runtime final
     {
     public:
@@ -57,6 +64,16 @@ namespace pipcore::desktop
         [[nodiscard]] size_t serialWrite(const uint8_t *data, size_t len) noexcept;
         [[nodiscard]] size_t serialWrite(uint8_t value) noexcept;
 
+        void uiTogglePause() noexcept;
+        void uiStepFrame() noexcept;
+        void uiCycleTimeScale() noexcept;
+        void uiCycleSpiLimit() noexcept;
+        void uiToggleRgb565Preview() noexcept;
+        void uiToggleRecording() noexcept;
+        void uiSaveScreenshot() noexcept;
+        void uiRestartProcess() noexcept;
+        void uiLogLine(const char *message) noexcept;
+
     private:
         Runtime() noexcept;
         Runtime(const Runtime &) = delete;
@@ -73,20 +90,57 @@ namespace pipcore::desktop
         [[nodiscard]] bool toggleRecording() noexcept;
         [[nodiscard]] bool startRecording() noexcept;
         void stopRecording() noexcept;
-        [[nodiscard]] bool encodeRecordingFrame(LONGLONG sampleTimeHns) noexcept;
-        void setTransientStatus(const std::wstring &message, uint32_t durationMs = 1800) noexcept;
+        [[nodiscard]] bool encodeRecordingFrame(int64_t sampleTime) noexcept;
+        void setTransientStatus(const char *message, uint32_t durationMs = 1800) noexcept;
         void refreshWindowTitle() noexcept;
+        void serviceSimClock(uint64_t realNowUs) noexcept;
+        void advanceFrameStep() noexcept;
+        void throttleSpiTransfer(size_t pixelCount) noexcept;
+        [[nodiscard]] uint32_t presentColor(uint32_t argb) const noexcept;
+        void togglePause() noexcept;
+        void stepFrame() noexcept;
+        void cycleTimeScale() noexcept;
+        void cycleSpiLimit() noexcept;
+        void toggleRgb565Preview() noexcept;
+        void toggleConsole() noexcept;
+        void stepBack() noexcept;
+        void logLine(const char *message) noexcept;
+#if defined(_WIN32) && !defined(PIPGUI_SIM_USE_WX)
         void handleKey(UINT vk, bool down) noexcept;
+#else
+        void handleKey(int key, bool down) noexcept;
+#endif
         void pushSerialChar(char ch) noexcept;
         [[nodiscard]] bool pinPressed(uint8_t pin) const noexcept;
+#if defined(_WIN32) && !defined(PIPGUI_SIM_USE_WX)
         static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) noexcept;
+#endif
         [[nodiscard]] static uint32_t color565ToArgb(uint16_t color565) noexcept;
 
     private:
+        friend class WxSimCanvas;
+        friend class WxSimFrame;
+#if defined(PIPGUI_SIM_USE_WX)
+        void *_wxApp = nullptr;
+        void *_wxFrame = nullptr;
+        void *_wxCanvas = nullptr;
+        void *_wxLog = nullptr;
+        void *_wxEventLoop = nullptr;
+        void *_recordPipe = nullptr;
+#if defined(_WIN32)
+        void *_recordProcess = nullptr;
+#endif
+#elif defined(_WIN32)
         HWND _hwnd = nullptr;
         HINSTANCE _instance = nullptr;
         BITMAPINFO _bitmapInfo = {};
-        std::wstring _windowTitle;
+#else
+        void *_window = nullptr;
+        void *_renderer = nullptr;
+        void *_texture = nullptr;
+        void *_recordPipe = nullptr;
+#endif
+        std::string _windowTitle;
 
         uint16_t _baseWidth = 0;
         uint16_t _baseHeight = 0;
@@ -99,8 +153,23 @@ namespace pipcore::desktop
         bool _shouldQuit = false;
         bool _dirty = false;
         uint64_t _lastPresentUs = 0;
+        uint64_t _lastRealClockUs = 0;
+        uint64_t _simClockUs = 0;
+        uint64_t _spiReadyUs = 0;
         uint64_t _statusUntilUs = 0;
-        std::wstring _statusText;
+        std::string _statusText;
+        uint32_t _timeScalePercent = 100;
+        uint32_t _spiLimitBytesPerSec = 0;
+        uint32_t _pendingFrameSteps = 0;
+        uint32_t _frameStepCount = 1;
+        uint64_t _drawCallCount = 0;
+        uint64_t _pixelWriteCount = 0;
+        uint64_t _presentFrameCount = 0;
+        bool _spiLimitEnabled = false;
+        bool _paused = false;
+        bool _rgb565Preview = false;
+        bool _consoleOpen = false;
+        bool _historyBrowsing = false;
 
         struct RecordingState
         {
@@ -109,12 +178,14 @@ namespace pipcore::desktop
             uint64_t nextFrameUs = 0;
             uint64_t frameIndex = 0;
             uint32_t fps = 30;
-            LONGLONG frameDurationHns = 0;
+            int64_t frameDuration = 0;
             bool active = false;
             std::vector<uint32_t> scratch;
         } _recording = {};
 
         std::vector<uint32_t> _framebuffer;
+        std::vector<std::vector<uint32_t>> _frameHistory;
+        size_t _frameHistoryCursor = 0;
         std::vector<char> _serialInput;
         size_t _serialReadOffset = 0;
 

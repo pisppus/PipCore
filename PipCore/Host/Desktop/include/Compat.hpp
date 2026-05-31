@@ -1,98 +1,106 @@
 #pragma once
 
+#include <PipCore/Config/Features.hpp>
+
+#if PIPCORE_TARGET_DESKTOP
+
 #include <PipCore/Platforms/Desktop/Runtime.hpp>
+
 #include <algorithm>
-#include <cstddef>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <iomanip>
-#include <sstream>
+#include <limits>
 #include <string>
+#include <string_view>
+#include <type_traits>
 
-using boolean = bool;
-using byte = unsigned char;
+inline constexpr unsigned char BIN = 2;
+inline constexpr unsigned char OCT = 8;
+inline constexpr unsigned char DEC = 10;
+inline constexpr unsigned char HEX = 16;
 
 class String
 {
 public:
     String() = default;
-    String(const char *value) : _value(value ? value : "") {}
-    String(const std::string &value) : _value(value) {}
+    String(const char *text) : _value(text ? text : "") {}
+    String(const std::string &text) : _value(text) {}
+    String(std::string &&text) noexcept : _value(std::move(text)) {}
     String(char ch) : _value(1, ch) {}
-    String(unsigned char value) : _value(std::to_string(static_cast<unsigned int>(value))) {}
-    String(signed char value) : _value(std::to_string(static_cast<int>(value))) {}
-    String(short value) : _value(std::to_string(static_cast<int>(value))) {}
-    String(unsigned short value) : _value(std::to_string(static_cast<unsigned int>(value))) {}
+    String(unsigned char value) : _value(std::to_string(static_cast<unsigned>(value))) {}
     String(int value) : _value(std::to_string(value)) {}
-    String(unsigned int value) : _value(std::to_string(value)) {}
+    String(unsigned value) : _value(std::to_string(value)) {}
     String(long value) : _value(std::to_string(value)) {}
     String(unsigned long value) : _value(std::to_string(value)) {}
     String(long long value) : _value(std::to_string(value)) {}
     String(unsigned long long value) : _value(std::to_string(value)) {}
-    String(float value) : _value(formatFloat(value, 2)) {}
-    String(double value) : _value(formatFloat(value, 2)) {}
-    String(float value, unsigned char digits) : _value(formatFloat(value, digits)) {}
-    String(double value, unsigned char digits) : _value(formatFloat(value, digits)) {}
+    String(int value, unsigned base) : _value(formatSignedBase(value, base)) {}
+    String(unsigned value, unsigned base) : _value(formatUnsignedBase(value, base)) {}
+    String(long value, unsigned base) : _value(formatSignedBase(value, base)) {}
+    String(unsigned long value, unsigned base) : _value(formatUnsignedBase(value, base)) {}
+    String(long long value, unsigned base) : _value(formatSignedBase(value, base)) {}
+    String(unsigned long long value, unsigned base) : _value(formatUnsignedBase(value, base)) {}
+    String(float value, unsigned decimals = 2) : _value(formatFloat(static_cast<double>(value), decimals)) {}
+    String(double value, unsigned decimals = 2) : _value(formatFloat(value, decimals)) {}
 
-    String(const String &) = default;
-    String(String &&) noexcept = default;
-    String &operator=(const String &) = default;
-    String &operator=(String &&) noexcept = default;
-
-    String &operator=(const char *value)
+    String &operator=(const char *text)
     {
-        _value = value ? value : "";
+        _value = text ? text : "";
         return *this;
     }
 
-    [[nodiscard]] unsigned int length() const noexcept { return static_cast<unsigned int>(_value.size()); }
-    [[nodiscard]] bool reserve(unsigned int size) noexcept
+    String &operator=(const std::string &text)
     {
-        _value.reserve(size);
+        _value = text;
+        return *this;
+    }
+
+    [[nodiscard]] size_t length() const noexcept { return _value.length(); }
+    [[nodiscard]] bool reserve(size_t capacity)
+    {
+        _value.reserve(capacity);
         return true;
     }
-    [[nodiscard]] const char *c_str() const noexcept { return _value.c_str(); }
 
-    char operator[](unsigned int index) const noexcept
+    void remove(size_t index)
     {
-        return (index < _value.size()) ? _value[index] : '\0';
-    }
-
-    void remove(unsigned int index)
-    {
-        remove(index, static_cast<unsigned int>(std::string::npos));
-    }
-
-    void remove(unsigned int index, unsigned int count)
-    {
-        if (index >= _value.size())
+        if (index >= _value.length())
+        {
+            _value.clear();
             return;
-        _value.erase(index, count);
+        }
+        _value.erase(index);
     }
 
-    [[nodiscard]] int indexOf(char ch, unsigned int fromIndex = 0) const noexcept
+    [[nodiscard]] int indexOf(char ch, unsigned fromIndex = 0) const noexcept
     {
-        if (fromIndex >= _value.size())
+        if (fromIndex >= _value.length())
             return -1;
         const size_t pos = _value.find(ch, fromIndex);
         return (pos == std::string::npos) ? -1 : static_cast<int>(pos);
     }
 
-    [[nodiscard]] String substring(unsigned int start) const
+    [[nodiscard]] String substring(unsigned from) const
     {
-        if (start >= _value.size())
+        if (from >= _value.length())
             return String();
-        return String(_value.substr(start));
+        return String(_value.substr(from));
     }
 
-    [[nodiscard]] String substring(unsigned int start, unsigned int end) const
+    [[nodiscard]] String substring(unsigned from, unsigned to) const
     {
-        if (start >= _value.size() || end <= start)
+        if (from >= _value.length() || to <= from)
             return String();
-        const size_t safeEnd = std::min<size_t>(end, _value.size());
-        return String(_value.substr(start, safeEnd - start));
+        const size_t safeTo = std::min<size_t>(to, _value.length());
+        return String(_value.substr(from, safeTo - from));
     }
+
+    [[nodiscard]] const char *c_str() const noexcept { return _value.c_str(); }
+    [[nodiscard]] char operator[](size_t index) const noexcept { return _value[index]; }
 
     String &operator+=(const String &rhs)
     {
@@ -106,138 +114,180 @@ public:
         return *this;
     }
 
-    String &operator+=(char ch)
+    String &operator+=(char rhs)
     {
-        _value.push_back(ch);
+        _value += rhs;
         return *this;
     }
 
-    friend String operator+(const String &lhs, const String &rhs) { return String(lhs._value + rhs._value); }
-    friend String operator+(const String &lhs, const char *rhs) { return String(lhs._value + std::string(rhs ? rhs : "")); }
-    friend String operator+(const char *lhs, const String &rhs) { return String(std::string(lhs ? lhs : "") + rhs._value); }
+    [[nodiscard]] friend String operator+(const String &lhs, const String &rhs)
+    {
+        return String(lhs._value + rhs._value);
+    }
+
+    [[nodiscard]] friend String operator+(const String &lhs, const char *rhs)
+    {
+        return String(lhs._value + (rhs ? rhs : ""));
+    }
+
+    [[nodiscard]] friend String operator+(const char *lhs, const String &rhs)
+    {
+        return String(std::string(lhs ? lhs : "") + rhs._value);
+    }
+
+    [[nodiscard]] bool operator==(const String &rhs) const noexcept { return _value == rhs._value; }
+    [[nodiscard]] bool operator!=(const String &rhs) const noexcept { return _value != rhs._value; }
 
 private:
-    static std::string formatFloat(double value, unsigned char digits)
+    template <typename T>
+    [[nodiscard]] static std::string formatUnsignedBase(T value, unsigned base)
     {
-        std::ostringstream stream;
-        stream.setf(std::ios::fixed, std::ios::floatfield);
-        stream << std::setprecision(digits) << value;
-        return stream.str();
+        if (base < 2 || base > 16)
+            return std::to_string(static_cast<unsigned long long>(value));
+
+        static constexpr char digits[] = "0123456789ABCDEF";
+        unsigned long long current = static_cast<unsigned long long>(value);
+        char buf[65];
+        size_t index = sizeof(buf);
+        buf[--index] = '\0';
+
+        do
+        {
+            buf[--index] = digits[current % base];
+            current /= base;
+        } while (current != 0);
+
+        return std::string(&buf[index]);
+    }
+
+    template <typename T>
+    [[nodiscard]] static std::string formatSignedBase(T value, unsigned base)
+    {
+        if (base < 2 || base > 16)
+            return std::to_string(static_cast<long long>(value));
+        if (value >= 0)
+            return formatUnsignedBase(static_cast<unsigned long long>(value), base);
+        return std::string("-") + formatUnsignedBase(static_cast<unsigned long long>(-(value + 1)) + 1ull, base);
+    }
+
+    [[nodiscard]] static std::string formatFloat(double value, unsigned decimals)
+    {
+        if (decimals > 9)
+            decimals = 9;
+        char fmt[8];
+        std::snprintf(fmt, sizeof(fmt), "%%.%uf", decimals);
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), fmt, value);
+        return std::string(buf);
     }
 
 private:
     std::string _value;
 };
 
-inline bool operator==(const String &lhs, const String &rhs) noexcept
-{
-    return std::strcmp(lhs.c_str(), rhs.c_str()) == 0;
-}
-
-inline bool operator!=(const String &lhs, const String &rhs) noexcept
-{
-    return !(lhs == rhs);
-}
-
-inline bool operator==(const String &lhs, const char *rhs) noexcept
-{
-    return std::strcmp(lhs.c_str(), rhs ? rhs : "") == 0;
-}
-
-inline bool operator!=(const String &lhs, const char *rhs) noexcept
-{
-    return !(lhs == rhs);
-}
-
-inline bool operator==(const char *lhs, const String &rhs) noexcept
-{
-    return rhs == lhs;
-}
-
-inline bool operator!=(const char *lhs, const String &rhs) noexcept
-{
-    return !(rhs == lhs);
-}
-
 class HardwareSerial
 {
 public:
-    void begin(unsigned long) {}
+    void begin(unsigned long) noexcept {}
 
-    [[nodiscard]] int available() { return pipcore::desktop::Runtime::instance().serialAvailable(); }
-    [[nodiscard]] int read() { return pipcore::desktop::Runtime::instance().serialRead(); }
-    [[nodiscard]] size_t availableForWrite() const { return pipcore::desktop::Runtime::instance().serialAvailableForWrite(); }
-
-    size_t write(uint8_t value) { return pipcore::desktop::Runtime::instance().serialWrite(value); }
-    size_t write(const uint8_t *data, size_t len) { return pipcore::desktop::Runtime::instance().serialWrite(data, len); }
-    size_t write(const char *data, size_t len) { return write(reinterpret_cast<const uint8_t *>(data), len); }
-
-    size_t print(const String &value) { return write(reinterpret_cast<const uint8_t *>(value.c_str()), value.length()); }
-    size_t print(const char *value)
+    [[nodiscard]] int available() noexcept
     {
-        const char *safe = value ? value : "";
-        return write(reinterpret_cast<const uint8_t *>(safe), std::strlen(safe));
+        return pipcore::desktop::Runtime::instance().serialAvailable();
     }
-    size_t print(char value) { return write(static_cast<uint8_t>(value)); }
+
+    [[nodiscard]] int read() noexcept
+    {
+        return pipcore::desktop::Runtime::instance().serialRead();
+    }
+
+    [[nodiscard]] size_t availableForWrite() const noexcept
+    {
+        return pipcore::desktop::Runtime::instance().serialAvailableForWrite();
+    }
+
+    size_t write(uint8_t value) noexcept
+    {
+        return pipcore::desktop::Runtime::instance().serialWrite(value);
+    }
+
+    size_t write(const uint8_t *data, size_t len) noexcept
+    {
+        return pipcore::desktop::Runtime::instance().serialWrite(data, len);
+    }
+
+    size_t print(const String &value) noexcept
+    {
+        return write(reinterpret_cast<const uint8_t *>(value.c_str()), value.length());
+    }
+
+    size_t print(const char *value) noexcept
+    {
+        if (!value)
+            return 0;
+        return write(reinterpret_cast<const uint8_t *>(value), std::strlen(value));
+    }
+
+    size_t print(char value) noexcept
+    {
+        return write(static_cast<uint8_t>(value));
+    }
+
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    size_t print(T value) noexcept
+    {
+        return print(String(value));
+    }
+
+    size_t println() noexcept
+    {
+        static constexpr uint8_t newline[] = {'\r', '\n'};
+        return write(newline, sizeof(newline));
+    }
 
     template <typename T>
-    size_t print(const T &value)
-    {
-        std::ostringstream stream;
-        stream << value;
-        const std::string text = stream.str();
-        return write(reinterpret_cast<const uint8_t *>(text.data()), text.size());
-    }
-
-    size_t println()
-    {
-        static const char newline = '\n';
-        return write(reinterpret_cast<const uint8_t *>(&newline), 1U);
-    }
-
-    template <typename T>
-    size_t println(const T &value)
+    size_t println(const T &value) noexcept
     {
         return print(value) + println();
     }
 };
 
-struct EspCompat
+class EspCompat
 {
-    void restart() const noexcept {}
+public:
+    void restart() noexcept
+    {
+        std::exit(0);
+    }
 };
 
 extern HardwareSerial Serial;
 extern EspCompat ESP;
 
-inline unsigned long millis()
+[[nodiscard]] inline unsigned long millis() noexcept
 {
     return pipcore::desktop::Runtime::instance().nowMs();
 }
 
-inline unsigned long micros()
+[[nodiscard]] inline unsigned long micros() noexcept
 {
     return static_cast<unsigned long>(pipcore::desktop::Runtime::instance().nowMicros());
 }
 
-inline void delay(unsigned long ms)
+inline void delay(unsigned long ms) noexcept
 {
-    pipcore::desktop::Runtime::instance().delayMs(ms);
-}
-
-inline void yield()
-{
-    pipcore::desktop::Runtime::instance().pumpEvents();
+    pipcore::desktop::Runtime::instance().delayMs(static_cast<uint32_t>(ms));
 }
 
 template <typename T>
-constexpr T min(const T &a, const T &b)
+[[nodiscard]] constexpr const T &min(const T &a, const T &b) noexcept
 {
     return (b < a) ? b : a;
 }
 
 template <typename T>
-constexpr T max(const T &a, const T &b)
+[[nodiscard]] constexpr const T &max(const T &a, const T &b) noexcept
 {
     return (a < b) ? b : a;
 }
+
+#endif
