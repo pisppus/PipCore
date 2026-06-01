@@ -149,10 +149,20 @@ namespace pipcore::desktop
                 applyThemeRecursive(node->GetData(), dark);
         }
 
+        [[nodiscard]] std::filesystem::path simWorkDir() noexcept
+        {
+            if (const char *workDir = std::getenv("PIPGUI_SIM_WORKDIR"))
+            {
+                if (*workDir)
+                    return std::filesystem::path(workDir);
+            }
+            return std::filesystem::current_path();
+        }
+
         [[nodiscard]] std::filesystem::path timestampedPath(const char *dirName, const char *ext)
         {
             namespace fs = std::filesystem;
-            fs::path dir = fs::current_path() / dirName;
+            fs::path dir = simWorkDir() / dirName;
             fs::create_directories(dir);
 
             const auto now = std::chrono::system_clock::now();
@@ -178,6 +188,73 @@ namespace pipcore::desktop
                           static_cast<long long>(ms),
                           ext);
             return dir / name;
+        }
+
+        [[nodiscard]] std::filesystem::path controlPath(const char *name)
+        {
+            return simWorkDir() / name;
+        }
+
+        void writeControlFile(const char *name) noexcept
+        {
+            try
+            {
+                std::ofstream out(controlPath(name), std::ios::binary | std::ios::trunc);
+                out << "1\n";
+            }
+            catch (...)
+            {
+            }
+        }
+
+        [[nodiscard]] std::string formatThousands(uint64_t value)
+        {
+            std::string text = std::to_string(value);
+            for (int pos = static_cast<int>(text.size()) - 3; pos > 0; pos -= 3)
+                text.insert(static_cast<size_t>(pos), " ");
+            return text;
+        }
+
+        [[nodiscard]] std::string padLeft(std::string text, size_t width)
+        {
+            if (text.size() >= width)
+                return text;
+            return std::string(width - text.size(), ' ') + text;
+        }
+
+        [[nodiscard]] std::string formatMilliseconds(uint64_t micros)
+        {
+            char text[32];
+            std::snprintf(text, sizeof(text), "%05.2f ms", static_cast<double>(micros) / 1000.0);
+            return text;
+        }
+
+        [[nodiscard]] wxString formatRecordElapsed(uint64_t micros)
+        {
+            const uint64_t totalSeconds = micros / 1'000'000ULL;
+            const uint64_t hours = totalSeconds / 3600ULL;
+            const uint64_t minutes = (totalSeconds / 60ULL) % 60ULL;
+            const uint64_t seconds = totalSeconds % 60ULL;
+            return wxString::Format("REC %02llu:%02llu:%02llu",
+                                    static_cast<unsigned long long>(hours),
+                                    static_cast<unsigned long long>(minutes),
+                                    static_cast<unsigned long long>(seconds));
+        }
+
+        void drawMetricText(wxDC &dc, const wxString &text, int x, int y, int maxWidth)
+        {
+            wxString out = text;
+            wxCoord w = 0;
+            wxCoord h = 0;
+            dc.GetTextExtent(out, &w, &h);
+            while (w > maxWidth && out.size() > 4)
+            {
+                out.RemoveLast();
+                dc.GetTextExtent(out + "...", &w, &h);
+            }
+            if (out != text)
+                out += "...";
+            dc.DrawText(out, x, y);
         }
 
         class SimWxApp final : public wxApp
@@ -256,6 +333,191 @@ namespace pipcore::desktop
         Runtime &_runtime;
     };
 
+    class WxMetricsPanel final : public wxPanel
+    {
+    public:
+        explicit WxMetricsPanel(wxWindow *parent, Runtime &runtime)
+            : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_SIMPLE),
+              _runtime(runtime)
+        {
+            auto *root = new wxBoxSizer(wxVERTICAL);
+            auto *grid = new wxFlexGridSizer(2, 2, 4, 8);
+            grid->AddGrowableCol(1, 1);
+
+            _redrawnLabel = new wxStaticText(this, wxID_ANY, "Redrawn");
+            _redrawnValue = new wxStaticText(this, wxID_ANY, "");
+            _heapLabel = new wxStaticText(this, wxID_ANY, "Heap");
+            _heapValue = new wxStaticText(this, wxID_ANY, "");
+            _timingValue = new wxStaticText(this, wxID_ANY, "");
+            _heapBar = new wxGauge(this, wxID_ANY, 240, wxDefaultPosition, wxDefaultSize, wxGA_HORIZONTAL);
+
+            grid->Add(_redrawnLabel, 0, wxALIGN_CENTER_VERTICAL);
+            grid->Add(_redrawnValue, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
+            grid->Add(_heapLabel, 0, wxALIGN_CENTER_VERTICAL);
+            grid->Add(_heapValue, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
+
+            root->Add(grid, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
+            root->Add(_heapBar, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
+            root->Add(_timingValue, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP | wxBOTTOM, 8);
+            SetSizer(root);
+            syncNativeSize();
+            syncTheme();
+        }
+
+        void syncNativeSize()
+        {
+            const int w = std::max(1, static_cast<int>(_runtime._width) * static_cast<int>(_runtime._scale));
+            SetMinSize(wxSize(w, 112));
+            SetInitialSize(wxSize(w, 112));
+        }
+
+        void syncTheme()
+        {
+            const bool dark = shouldUseDarkUi();
+            const wxColour bg = dark ? wxColour(24, 24, 24) : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+            const wxColour fg = dark ? wxColour(241, 241, 241) : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+            const wxColour muted = dark ? wxColour(176, 176, 176) : wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+            const wxColour track = dark ? wxColour(52, 52, 52) : wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+            const wxColour fill = wxColour(0, 120, 215);
+
+            SetBackgroundColour(bg);
+            SetForegroundColour(fg);
+            for (wxWindowList::compatibility_iterator node = GetChildren().GetFirst(); node; node = node->GetNext())
+            {
+                wxWindow *child = node->GetData();
+                if (child)
+                {
+                    child->SetBackgroundColour(bg);
+                    child->SetForegroundColour(fg);
+                }
+            }
+            if (_redrawnLabel)
+                _redrawnLabel->SetForegroundColour(muted);
+            if (_heapLabel)
+                _heapLabel->SetForegroundColour(muted);
+            if (_timingValue)
+                _timingValue->SetForegroundColour(muted);
+            if (_heapBar)
+            {
+                _heapBar->SetBackgroundColour(track);
+                _heapBar->SetForegroundColour(fill);
+            }
+
+            wxFont mono = GetFont();
+            mono.SetFamily(wxFONTFAMILY_TELETYPE);
+#if defined(__linux__)
+            mono.SetPointSize(std::max(8, mono.GetPointSize() - 1));
+#endif
+            if (_redrawnLabel)
+                _redrawnLabel->SetFont(mono);
+            if (_redrawnValue)
+                _redrawnValue->SetFont(mono);
+            if (_heapLabel)
+                _heapLabel->SetFont(mono);
+            if (_heapValue)
+                _heapValue->SetFont(mono);
+            if (_timingValue)
+                _timingValue->SetFont(mono);
+        }
+
+        void syncMetrics()
+        {
+            const int screenPixels = std::max<int>(1, static_cast<int>(_runtime._width) * static_cast<int>(_runtime._height));
+            const uint64_t redrawn = std::min<uint64_t>(_runtime._lastRedrawnPixels, static_cast<uint64_t>(screenPixels));
+            const unsigned percent = static_cast<unsigned>((redrawn * 100ULL + static_cast<uint64_t>(screenPixels / 2)) /
+                                                           static_cast<uint64_t>(screenPixels));
+            const std::string redrawnCount = padLeft(formatThousands(redrawn), 7U);
+            const std::string screenCount = padLeft(formatThousands(static_cast<uint64_t>(screenPixels)), 7U);
+            if (_redrawnValue)
+            {
+                _redrawnValue->SetLabel(wxString::Format("%3u%% (%s / %s px)",
+                                                         percent,
+                                                         wxString::FromUTF8(redrawnCount.c_str()),
+                                                         wxString::FromUTF8(screenCount.c_str())));
+            }
+
+            const int heapMaxKb = 240;
+            const int heapKb = static_cast<int>((_runtime._simHeapBytes + 1023U) / 1024U);
+            const int peakKb = static_cast<int>((_runtime._simHeapPeakBytes + 1023U) / 1024U);
+            if (_heapValue)
+                _heapValue->SetLabel(wxString::Format("%3d KB / %3d KB   Peak: %3d KB", heapKb, heapMaxKb, peakKb));
+            if (_heapBar)
+                _heapBar->SetValue(std::clamp(heapKb, 0, heapMaxKb));
+
+            const std::string cpuText = formatMilliseconds(_runtime._lastRenderCpuUs);
+            const std::string spiText = formatMilliseconds(_runtime._lastEstimatedSpiUs);
+            if (_timingValue)
+                _timingValue->SetLabel("Render CPU: " + wxString::FromUTF8(cpuText.c_str()) +
+                                       "\nSPI estimate: " + wxString::FromUTF8(spiText.c_str()));
+        }
+
+    private:
+        void onPaint(wxPaintEvent &)
+        {
+            wxAutoBufferedPaintDC dc(this);
+            const bool dark = shouldUseDarkUi();
+            const wxColour bg = dark ? wxColour(24, 24, 24) : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+            const wxColour fg = dark ? wxColour(241, 241, 241) : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+            const wxColour muted = dark ? wxColour(176, 176, 176) : wxColour(92, 92, 92);
+            const wxColour track = dark ? wxColour(52, 52, 52) : wxColour(220, 220, 220);
+            const wxColour fill = wxColour(0, 120, 215);
+
+            dc.SetBackground(wxBrush(bg));
+            dc.Clear();
+            dc.SetTextForeground(fg);
+            wxFont font = GetFont();
+            font.SetFamily(wxFONTFAMILY_TELETYPE);
+            dc.SetFont(font);
+
+            const int width = GetClientSize().GetWidth();
+            const int screenPixels = std::max<int>(1, static_cast<int>(_runtime._width) * static_cast<int>(_runtime._height));
+            const uint64_t redrawn = std::min<uint64_t>(_runtime._lastRedrawnPixels, static_cast<uint64_t>(screenPixels));
+            const unsigned percent = static_cast<unsigned>((redrawn * 100ULL + static_cast<uint64_t>(screenPixels / 2)) /
+                                                           static_cast<uint64_t>(screenPixels));
+
+            const std::string redrawnCount = padLeft(formatThousands(redrawn), 7U);
+            const std::string screenCount = padLeft(formatThousands(static_cast<uint64_t>(screenPixels)), 7U);
+            const wxString redrawnText = wxString::Format("Redrawn: %3u%% (", percent) +
+                                         wxString::FromUTF8(redrawnCount.c_str()) + " / " +
+                                         wxString::FromUTF8(screenCount.c_str()) + " px)";
+            drawMetricText(dc, redrawnText, 8, 7, width - 16);
+
+            const int heapMaxKb = 240;
+            const int heapKb = static_cast<int>((_runtime._simHeapBytes + 1023U) / 1024U);
+            const int peakKb = static_cast<int>((_runtime._simHeapPeakBytes + 1023U) / 1024U);
+            const wxString heapText = wxString::Format("Heap: %3d KB / %3d KB   Peak: %3d KB", heapKb, heapMaxKb, peakKb);
+            drawMetricText(dc, heapText, 8, 31, width - 16);
+
+            const int barX = 8;
+            const int barY = 56;
+            const int barW = std::max(1, width - 16);
+            const int barH = 8;
+            const int fillW = std::clamp((barW * heapKb) / heapMaxKb, 0, barW);
+            dc.SetPen(wxPen(track));
+            dc.SetBrush(wxBrush(track));
+            dc.DrawRectangle(barX, barY, barW, barH);
+            dc.SetPen(wxPen(fill));
+            dc.SetBrush(wxBrush(fill));
+            dc.DrawRectangle(barX, barY, fillW, barH);
+
+            dc.SetTextForeground(muted);
+            const std::string cpuText = formatMilliseconds(_runtime._lastRenderCpuUs);
+            const std::string spiText = formatMilliseconds(_runtime._lastEstimatedSpiUs);
+            const wxString timing = "Render CPU: " + wxString::FromUTF8(cpuText.c_str()) +
+                                    "   SPI estimate: " + wxString::FromUTF8(spiText.c_str());
+            drawMetricText(dc, timing, 8, 69, width - 16);
+        }
+
+    private:
+        Runtime &_runtime;
+        wxStaticText *_redrawnLabel = nullptr;
+        wxStaticText *_redrawnValue = nullptr;
+        wxStaticText *_heapLabel = nullptr;
+        wxStaticText *_heapValue = nullptr;
+        wxGauge *_heapBar = nullptr;
+        wxStaticText *_timingValue = nullptr;
+    };
+
     class WxSimFrame final : public wxFrame
     {
     public:
@@ -270,19 +532,20 @@ namespace pipcore::desktop
         {
             auto *root = new wxBoxSizer(wxVERTICAL);
             auto *top = new wxBoxSizer(wxHORIZONTAL);
-            auto *left = new wxBoxSizer(wxVERTICAL);
 
+            auto *left = new wxBoxSizer(wxVERTICAL);
             _canvas = new WxSimCanvas(this, runtime);
             _canvas->syncNativeSize();
             left->Add(_canvas, 0, wxALL, 8);
-            _stats = new wxStaticText(this, wxID_ANY, "");
-            left->Add(_stats, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
+            _metrics = new WxMetricsPanel(this, runtime);
+            left->Add(_metrics, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
             top->Add(left, 0, wxEXPAND);
 
             auto *side = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(360, -1));
             auto *panel = new wxBoxSizer(wxVERTICAL);
 
-            auto addLabel = [&](const char *text) {
+            auto addLabel = [&](const char *text)
+            {
                 auto *label = new wxStaticText(side, wxID_ANY, wxString::FromUTF8(text));
                 panel->Add(label, 0, wxLEFT | wxRIGHT | wxTOP, 8);
             };
@@ -290,14 +553,19 @@ namespace pipcore::desktop
             addLabel("Runtime");
             _pause = new wxCheckBox(side, wxID_ANY, "Pause");
             panel->Add(_pause, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
-            auto *stepRow = new wxBoxSizer(wxHORIZONTAL);
-            auto *stepBack = new wxButton(side, wxID_ANY, "Back", wxDefaultPosition, wxSize(82, -1));
-            auto *stepForward = new wxButton(side, wxID_ANY, "Forward", wxDefaultPosition, wxSize(82, -1));
-            _stepCount = new wxSpinCtrl(side, wxID_ANY, "1", wxDefaultPosition, wxSize(104, -1), wxSP_ARROW_KEYS, 1, 120, 1);
-            stepRow->Add(stepBack, 1, wxRIGHT, 4);
-            stepRow->Add(_stepCount, 0, wxRIGHT, 4);
-            stepRow->Add(stepForward, 1, 0, 0);
-            panel->Add(stepRow, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
+            auto *stepCountRow = new wxBoxSizer(wxHORIZONTAL);
+            auto *stepLabel = new wxStaticText(side, wxID_ANY, "Step frames");
+            _stepCount = new wxSpinCtrl(side, wxID_ANY, "1", wxDefaultPosition, wxSize(136, -1), wxSP_ARROW_KEYS, 1, 120, 1);
+            stepCountRow->Add(stepLabel, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+            stepCountRow->Add(_stepCount, 0, 0, 0);
+            panel->Add(stepCountRow, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
+
+            auto *stepButtonRow = new wxBoxSizer(wxHORIZONTAL);
+            auto *stepBack = new wxButton(side, wxID_ANY, "Back");
+            auto *stepForward = new wxButton(side, wxID_ANY, "Forward");
+            stepButtonRow->Add(stepBack, 1, wxRIGHT, 6);
+            stepButtonRow->Add(stepForward, 1, 0, 0);
+            panel->Add(stepButtonRow, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 6);
 
             addLabel("Time scale");
             _timeScaleValue = new wxStaticText(side, wxID_ANY, "100%");
@@ -338,23 +606,27 @@ namespace pipcore::desktop
             SetSizer(root);
 
             _runtime._wxCanvas = _canvas;
+            _runtime._wxMetrics = _metrics;
             _runtime._wxLog = _log;
 
-            auto bindInput = [this](wxWindow *window) {
-                window->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent &event) {
+            auto bindInput = [this](wxWindow *window)
+            {
+                window->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent &event)
+                             {
                     const int key = event.GetKeyCode();
                     _runtime.handleKey(key, true);
                     if (key != WXK_LEFT && key != WXK_RIGHT && key != WXK_RETURN && key != WXK_SPACE &&
+                        key != WXK_F1 && key != WXK_F2 && key != WXK_F3 &&
                         key != 'A' && key != 'D')
                     {
                         event.Skip();
-                    }
-                });
-                window->Bind(wxEVT_KEY_UP, [this](wxKeyEvent &event) {
+                    } });
+                window->Bind(wxEVT_KEY_UP, [this](wxKeyEvent &event)
+                             {
                     _runtime.handleKey(event.GetKeyCode(), false);
-                    event.Skip();
-                });
-                window->Bind(wxEVT_CHAR, [this](wxKeyEvent &event) {
+                    event.Skip(); });
+                window->Bind(wxEVT_CHAR, [this](wxKeyEvent &event)
+                             {
                     const int key = event.GetUnicodeKey();
                     if (key >= 32 && key <= 126)
                     {
@@ -367,54 +639,62 @@ namespace pipcore::desktop
                     else
                     {
                         event.Skip();
-                    }
-                });
+                    } });
             };
             bindInput(this);
             bindInput(_canvas);
 
-            Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent &event) {
+            Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent &event)
+                 {
+                if (!_runtime._restartRequested)
+                    _runtime.markUserExit();
                 _runtime._shouldQuit = true;
-                event.Skip();
-            });
-            _pause->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) {
+                event.Skip(); });
+            _pause->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &)
+                         {
                 _runtime._paused = _pause->GetValue();
                 _runtime.setTransientStatus(_runtime._paused ? "Paused" : "Running");
-                syncControls();
-            });
-            stepBack->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { _runtime.stepBack(); });
-            stepForward->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { _runtime.stepFrame(); });
-            _stepCount->Bind(wxEVT_SPINCTRL, [this](wxSpinEvent &) {
+                syncControls(); });
+            stepBack->Bind(wxEVT_BUTTON, [this](wxCommandEvent &)
+                           { _runtime.stepBack(); });
+            stepForward->Bind(wxEVT_BUTTON, [this](wxCommandEvent &)
+                              { _runtime.stepFrame(); });
+            _stepCount->Bind(wxEVT_SPINCTRL, [this](wxSpinEvent &)
+                             {
                 _runtime._frameStepCount = static_cast<uint32_t>(_stepCount->GetValue());
-                syncControls();
-            });
-            _timeScale->Bind(wxEVT_SLIDER, [this](wxCommandEvent &) {
+                syncControls(); });
+            _timeScale->Bind(wxEVT_SLIDER, [this](wxCommandEvent &)
+                             {
                 _runtime._timeScalePercent = static_cast<uint32_t>(_timeScale->GetValue());
-                syncControls();
-            });
-            _spiLimit->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) {
+                syncControls(); });
+            _spiLimit->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &)
+                            {
                 _runtime._spiLimitEnabled = _spiLimit->GetValue();
-                syncControls();
-            });
-            _spi->Bind(wxEVT_SLIDER, [this](wxCommandEvent &) {
+                syncControls(); });
+            _spi->Bind(wxEVT_SLIDER, [this](wxCommandEvent &)
+                       {
                 const uint32_t mhz = static_cast<uint32_t>(_spi->GetValue());
                 _runtime._spiLimitBytesPerSec = (mhz * 1'000'000U) / 8U;
-                syncControls();
-            });
-            _rgb565->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) {
+                syncControls(); });
+            _rgb565->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &)
+                          {
                 _runtime._rgb565Preview = _rgb565->GetValue();
                 _runtime.requestPresent();
                 _runtime.presentNow();
-                syncControls();
-            });
-            shots->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { (void)_runtime.saveScreenshot(); });
-            record->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { (void)_runtime.toggleRecording(); });
-            restart->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { (void)_runtime.restartProcess(); });
+                syncControls(); });
+            shots->Bind(wxEVT_BUTTON, [this](wxCommandEvent &)
+                        { (void)_runtime.saveScreenshot(); });
+            record->Bind(wxEVT_BUTTON, [this](wxCommandEvent &)
+                         { (void)_runtime.toggleRecording(); });
+            restart->Bind(wxEVT_BUTTON, [this](wxCommandEvent &)
+                          { (void)_runtime.restartProcess(); });
 
             CreateStatusBar();
             applyNativeTitleBarTheme(this);
             applyThemeRecursive(this, shouldUseDarkUi());
             applyStatusTheme();
+            if (_metrics)
+                _metrics->syncTheme();
             if (shouldUseDarkUi() && _log)
             {
                 _log->SetBackgroundColour(wxColour(18, 18, 18));
@@ -452,35 +732,19 @@ namespace pipcore::desktop
             if (_stepCount)
                 _stepCount->SetValue(static_cast<int>(_runtime._frameStepCount));
 
-            wxString status;
             const std::string spiText = _runtime._spiLimitEnabled
                                             ? std::to_string((_runtime._spiLimitBytesPerSec * 8U) / 1'000'000U) + " MHz"
                                             : "off";
-            status.Printf("time=%u%%  spi=%s  %s%s",
-                          _runtime._timeScalePercent,
-                          spiText.c_str(),
-                          _runtime._rgb565Preview ? "RGB565" : "RGB888",
-                          _runtime._recording.active ? "  REC" : "");
+            const std::string recText = _runtime._recording.active
+                                            ? ("  " + formatRecordElapsed(monotonicMicros() - _runtime._recording.startedUs).ToStdString())
+                                            : std::string();
+            wxString status = wxString::Format("time=%u%%  spi=", _runtime._timeScalePercent) +
+                              wxString::FromUTF8(spiText.c_str()) + "  " +
+                              (_runtime._rgb565Preview ? "RGB565" : "RGB888") +
+                              wxString::FromUTF8(recText.c_str());
             SetStatusText(status);
-            updateStats();
-        }
-
-        void updateStats()
-        {
-            if (!_stats)
-                return;
-
-            const size_t fbBytes = _runtime._framebuffer.size() * sizeof(uint32_t);
-            const size_t historyBytes = fbBytes * _runtime._frameHistory.size();
-            wxString text;
-            text.Printf("frames=%llu  draw=%llu  pixels=%llu  fb=%zu KB  history=%zu KB  rec=%s",
-                        static_cast<unsigned long long>(_runtime._presentFrameCount),
-                        static_cast<unsigned long long>(_runtime._drawCallCount),
-                        static_cast<unsigned long long>(_runtime._pixelWriteCount),
-                        fbBytes / 1024U,
-                        historyBytes / 1024U,
-                        _runtime._recording.active ? "on" : "off");
-            _stats->SetLabel(text);
+            if (_metrics)
+                _metrics->syncMetrics();
         }
 
         void applyStatusTheme()
@@ -507,6 +771,8 @@ namespace pipcore::desktop
             if (_canvas)
             {
                 _canvas->syncNativeSize();
+                if (_metrics)
+                    _metrics->syncNativeSize();
                 Fit();
                 SetMinSize(GetBestSize());
             }
@@ -515,6 +781,7 @@ namespace pipcore::desktop
     private:
         Runtime &_runtime;
         WxSimCanvas *_canvas = nullptr;
+        WxMetricsPanel *_metrics = nullptr;
         wxCheckBox *_pause = nullptr;
         wxCheckBox *_rgb565 = nullptr;
         wxCheckBox *_spiLimit = nullptr;
@@ -523,7 +790,6 @@ namespace pipcore::desktop
         wxSlider *_timeScale = nullptr;
         wxStaticText *_spiValue = nullptr;
         wxSlider *_spi = nullptr;
-        wxStaticText *_stats = nullptr;
         wxTextCtrl *_log = nullptr;
     };
 
@@ -571,6 +837,10 @@ namespace pipcore::desktop
         _frameHistory.clear();
         _frameHistoryCursor = 0;
         _historyBrowsing = false;
+        _framePixelWriteCount = 0;
+        _lastRedrawnPixels = 0;
+        _lastRenderCpuUs = 0;
+        _lastEstimatedSpiUs = 0;
         updateBitmapInfo();
         resizeWindow();
         requestPresent();
@@ -581,7 +851,13 @@ namespace pipcore::desktop
     {
         if (_framebuffer.empty())
             return;
+        if (_frameCpuStartUs == 0)
+            _frameCpuStartUs = monotonicMicros();
         std::fill(_framebuffer.begin(), _framebuffer.end(), color565ToArgb(color565));
+        _framePixelWriteCount += _framebuffer.size();
+        ++_drawCallCount;
+        _pixelWriteCount += _framebuffer.size();
+        throttleSpiTransfer(_framebuffer.size());
         requestPresent();
     }
 
@@ -597,8 +873,11 @@ namespace pipcore::desktop
             return;
 
         const size_t pixelCount = static_cast<size_t>(dstX2 - dstX1) * static_cast<size_t>(dstY2 - dstY1);
+        if (_frameCpuStartUs == 0)
+            _frameCpuStartUs = monotonicMicros();
         ++_drawCallCount;
         _pixelWriteCount += pixelCount;
+        _framePixelWriteCount += pixelCount;
         throttleSpiTransfer(pixelCount);
 
         const int32_t srcOffsetX = dstX1 - x;
@@ -721,6 +1000,17 @@ namespace pipcore::desktop
             _simClockUs += (realDelta * _timeScalePercent) / 100U;
     }
 
+    void Runtime::markUserExit() noexcept
+    {
+        writeControlFile("_sim-user-exit");
+    }
+
+    void Runtime::markRestartRequest() noexcept
+    {
+        _restartRequested = true;
+        writeControlFile("_sim-restart");
+    }
+
     void Runtime::advanceFrameStep() noexcept { _pendingFrameSteps += std::max<uint32_t>(1U, _frameStepCount); }
 
     void Runtime::throttleSpiTransfer(size_t pixelCount) noexcept
@@ -768,7 +1058,9 @@ namespace pipcore::desktop
 
     void Runtime::cycleTimeScale() noexcept
     {
-        _timeScalePercent = (_timeScalePercent == 100) ? 50 : (_timeScalePercent == 50) ? 25 : (_timeScalePercent == 25) ? 10 : 100;
+        _timeScalePercent = (_timeScalePercent == 100) ? 50 : (_timeScalePercent == 50) ? 25
+                                                          : (_timeScalePercent == 25)   ? 10
+                                                                                        : 100;
         if (_wxFrame)
             static_cast<WxSimFrame *>(_wxFrame)->syncControls();
     }
@@ -894,21 +1186,32 @@ namespace pipcore::desktop
         _dirty = false;
         _lastPresentUs = monotonicMicros();
         ++_presentFrameCount;
-        if (!_historyBrowsing && !_framebuffer.empty())
+        const uint64_t screenPixels = static_cast<uint64_t>(_width) * static_cast<uint64_t>(_height);
+        _lastRedrawnPixels = std::min<uint64_t>(_framePixelWriteCount, screenPixels);
+        _lastRenderCpuUs = (_frameCpuStartUs != 0 && _lastPresentUs >= _frameCpuStartUs) ? (_lastPresentUs - _frameCpuStartUs) : 0;
+        _lastEstimatedSpiUs = (_spiLimitBytesPerSec != 0)
+                                  ? ((_lastRedrawnPixels * 2ULL * 1'000'000ULL + (_spiLimitBytesPerSec - 1U)) / _spiLimitBytesPerSec)
+                                  : 0;
+        constexpr uint32_t kSimHeapMax = 240U * 1024U;
+        const uint64_t dynamicEstimate = (screenPixels * 2ULL) + (_lastRedrawnPixels / 2ULL) + (_recording.active ? 16ULL * 1024ULL : 0ULL);
+        _simHeapBytes = static_cast<uint32_t>(std::min<uint64_t>(kSimHeapMax, 48ULL * 1024ULL + dynamicEstimate));
+        _simHeapPeakBytes = std::max(_simHeapPeakBytes, _simHeapBytes);
+        _framePixelWriteCount = 0;
+        _frameCpuStartUs = 0;
+        if (!_historyBrowsing && !_framebuffer.empty() &&
+            (_lastHistoryCaptureUs == 0 || (_lastPresentUs - _lastHistoryCaptureUs) >= 100'000U))
         {
-            if (_frameHistory.empty() || _frameHistory.back() != _framebuffer)
-            {
-                _frameHistory.push_back(_framebuffer);
-                constexpr size_t maxHistoryFrames = 120U;
-                if (_frameHistory.size() > maxHistoryFrames)
-                    _frameHistory.erase(_frameHistory.begin());
-                _frameHistoryCursor = _frameHistory.size() - 1U;
-            }
+            _frameHistory.push_back(_framebuffer);
+            _lastHistoryCaptureUs = _lastPresentUs;
+            constexpr size_t maxHistoryFrames = 60U;
+            if (_frameHistory.size() > maxHistoryFrames)
+                _frameHistory.erase(_frameHistory.begin());
+            _frameHistoryCursor = _frameHistory.size() - 1U;
         }
         if (_wxCanvas)
             static_cast<WxSimCanvas *>(_wxCanvas)->Refresh(false);
-        if (_wxFrame)
-            static_cast<WxSimFrame *>(_wxFrame)->updateStats();
+        if (_wxMetrics)
+            static_cast<WxMetricsPanel *>(_wxMetrics)->syncMetrics();
     }
 
     void Runtime::serviceRecording(uint64_t nowUs) noexcept
@@ -927,34 +1230,14 @@ namespace pipcore::desktop
             _recording.nextFrameUs += 1'000'000ULL / _recording.fps;
             if (nowUs > _recording.nextFrameUs + 1'000'000ULL / _recording.fps)
                 _recording.nextFrameUs = nowUs + 1'000'000ULL / _recording.fps;
+            if (_wxFrame && (_recording.frameIndex % _recording.fps) == 0)
+                static_cast<WxSimFrame *>(_wxFrame)->syncControls();
         }
     }
 
     bool Runtime::restartProcess() noexcept
     {
-        const wxString exe = wxStandardPaths::Get().GetExecutablePath();
-        if (exe.empty())
-            return false;
-#if defined(_WIN32)
-        std::wstring command = L"\"" + exe.ToStdWstring() + L"\"";
-        STARTUPINFOW si = {};
-        PROCESS_INFORMATION pi = {};
-        si.cb = sizeof(si);
-        if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi))
-            return false;
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-#else
-        const std::string path = exe.ToStdString();
-        const pid_t pid = fork();
-        if (pid < 0)
-            return false;
-        if (pid == 0)
-        {
-            execl(path.c_str(), path.c_str(), static_cast<char *>(nullptr));
-            _exit(127);
-        }
-#endif
+        markRestartRequest();
         _shouldQuit = true;
         if (_wxFrame)
             static_cast<wxFrame *>(_wxFrame)->Close(true);
@@ -967,18 +1250,100 @@ namespace pipcore::desktop
             return false;
         try
         {
-            const auto out = timestampedPath("shots", "png");
-            wxImage image(_width, _height, false);
-            unsigned char *rgb = image.GetData();
-            for (size_t i = 0; i < _framebuffer.size(); ++i)
+            const auto pngOut = timestampedPath("shots", "png");
+            const auto bmpOut = timestampedPath("shots", "bmp");
+            if (wxImage::FindHandler(wxBITMAP_TYPE_PNG) != nullptr)
             {
-                const uint32_t c = presentColor(_framebuffer[i]);
-                rgb[i * 3U + 0U] = static_cast<unsigned char>((c >> 16) & 0xFFU);
-                rgb[i * 3U + 1U] = static_cast<unsigned char>((c >> 8) & 0xFFU);
-                rgb[i * 3U + 2U] = static_cast<unsigned char>(c & 0xFFU);
+                wxImage image(_width, _height, false);
+                unsigned char *rgb = image.GetData();
+                for (size_t i = 0; i < _framebuffer.size(); ++i)
+                {
+                    const uint32_t c = presentColor(_framebuffer[i]);
+                    rgb[i * 3U + 0U] = static_cast<unsigned char>((c >> 16) & 0xFFU);
+                    rgb[i * 3U + 1U] = static_cast<unsigned char>((c >> 8) & 0xFFU);
+                    rgb[i * 3U + 2U] = static_cast<unsigned char>(c & 0xFFU);
+                }
+                const bool ok = image.SaveFile(wxString::FromUTF8(pngOut.string().c_str()), wxBITMAP_TYPE_PNG);
+                if (ok)
+                {
+                    const std::string message = "screenshot: " + pngOut.string();
+                    uiLogLine(message.c_str());
+                    return true;
+                }
             }
-            const bool ok = image.SaveFile(wxString::FromUTF8(out.string().c_str()), wxBITMAP_TYPE_PNG);
-            const std::string message = "screenshot: " + out.string();
+
+            std::ofstream file(bmpOut, std::ios::binary | std::ios::trunc);
+            if (!file)
+                return false;
+
+            const uint32_t width = _width;
+            const uint32_t height = _height;
+            const uint32_t rowBytes = width * 3U;
+            const uint32_t rowStride = (rowBytes + 3U) & ~3U;
+            const uint32_t pixelBytes = rowStride * height;
+            const uint32_t fileSize = 54U + pixelBytes;
+            const uint32_t dibSize = 40U;
+            const int32_t signedWidth = static_cast<int32_t>(width);
+            const int32_t signedHeight = static_cast<int32_t>(height);
+            const uint16_t planes = 1U;
+            const uint16_t bpp = 24U;
+            const uint32_t compression = 0U;
+            const uint32_t imageSize = pixelBytes;
+            const int32_t ppm = 2835;
+            const uint32_t colorsUsed = 0U;
+            const uint32_t colorsImportant = 0U;
+
+            auto write16 = [&file](uint16_t value)
+            {
+                file.put(static_cast<char>(value & 0xFFU));
+                file.put(static_cast<char>((value >> 8) & 0xFFU));
+            };
+            auto write32 = [&file](uint32_t value)
+            {
+                file.put(static_cast<char>(value & 0xFFU));
+                file.put(static_cast<char>((value >> 8) & 0xFFU));
+                file.put(static_cast<char>((value >> 16) & 0xFFU));
+                file.put(static_cast<char>((value >> 24) & 0xFFU));
+            };
+            auto writeS32 = [&write32](int32_t value)
+            {
+                write32(static_cast<uint32_t>(value));
+            };
+
+            file.put('B');
+            file.put('M');
+            write32(fileSize);
+            write16(0U);
+            write16(0U);
+            write32(54U);
+            write32(dibSize);
+            writeS32(signedWidth);
+            writeS32(signedHeight);
+            write16(planes);
+            write16(bpp);
+            write32(compression);
+            write32(imageSize);
+            writeS32(ppm);
+            writeS32(ppm);
+            write32(colorsUsed);
+            write32(colorsImportant);
+
+            std::vector<uint8_t> row(rowStride, 0U);
+            for (int32_t y = static_cast<int32_t>(height) - 1; y >= 0; --y)
+            {
+                uint8_t *dst = row.data();
+                for (uint32_t x = 0; x < width; ++x)
+                {
+                    const uint32_t c = presentColor(_framebuffer[static_cast<size_t>(y) * width + x]);
+                    *dst++ = static_cast<uint8_t>(c & 0xFFU);
+                    *dst++ = static_cast<uint8_t>((c >> 8) & 0xFFU);
+                    *dst++ = static_cast<uint8_t>((c >> 16) & 0xFFU);
+                }
+                file.write(reinterpret_cast<const char *>(row.data()), static_cast<std::streamsize>(rowStride));
+            }
+
+            const bool ok = static_cast<bool>(file);
+            const std::string message = "screenshot: " + bmpOut.string();
             uiLogLine(ok ? message.c_str() : "screenshot failed");
             return ok;
         }
@@ -1078,7 +1443,8 @@ namespace pipcore::desktop
             _recording.fps = 30;
             _recording.frameDuration = 1;
             _recording.frameIndex = 0;
-            _recording.nextFrameUs = monotonicMicros();
+            _recording.startedUs = monotonicMicros();
+            _recording.nextFrameUs = _recording.startedUs;
             _recording.active = true;
             if (_wxFrame)
                 static_cast<WxSimFrame *>(_wxFrame)->syncControls();
@@ -1149,1952 +1515,17 @@ namespace pipcore::desktop
         case WXK_SPACE:
             _selectDown = down;
             break;
-        default:
-            break;
-        }
-    }
-
-    void Runtime::pushSerialChar(char ch) noexcept
-    {
-        if (_serialReadOffset != 0 && _serialReadOffset >= _serialInput.size())
-        {
-            _serialInput.clear();
-            _serialReadOffset = 0;
-        }
-        _serialInput.push_back(ch);
-    }
-
-    bool Runtime::pinPressed(uint8_t pin) const noexcept
-    {
-        if (pin == kPrevPin)
-            return _prevDown;
-        if (pin == kNextPin)
-            return _nextDown;
-        if (pin == kSelectPin)
-            return _selectDown;
-        return false;
-    }
-
-    uint32_t Runtime::color565ToArgb(uint16_t color565) noexcept
-    {
-        const uint8_t r5 = static_cast<uint8_t>((color565 >> 11) & 0x1Fu);
-        const uint8_t g6 = static_cast<uint8_t>((color565 >> 5) & 0x3Fu);
-        const uint8_t b5 = static_cast<uint8_t>(color565 & 0x1Fu);
-        const uint8_t r8 = static_cast<uint8_t>((r5 * 255U + 15U) / 31U);
-        const uint8_t g8 = static_cast<uint8_t>((g6 * 255U + 31U) / 63U);
-        const uint8_t b8 = static_cast<uint8_t>((b5 * 255U + 15U) / 31U);
-        return 0xFF000000u | (static_cast<uint32_t>(r8) << 16) | (static_cast<uint32_t>(g8) << 8) | b8;
-    }
-}
-
-#elif defined(_WIN32)
-
-#include <PipCore/Platforms/Desktop/Runtime.hpp>
-#include <algorithm>
-#include <chrono>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <dwmapi.h>
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mfreadwrite.h>
-#include <objbase.h>
-#include <wincodec.h>
-#include <iostream>
-#include <thread>
-
-namespace pipcore::desktop
-{
-    namespace
-    {
-        constexpr wchar_t kWindowClassName[] = L"PipGuiDesktopSimulatorWindow";
-        constexpr uint8_t kPrevPin =
-#ifdef PIPGUI_SIM_BTN_PREV_PIN
-            static_cast<uint8_t>(PIPGUI_SIM_BTN_PREV_PIN);
-#else
-            4U;
-#endif
-        constexpr uint8_t kNextPin =
-#ifdef PIPGUI_SIM_BTN_NEXT_PIN
-            static_cast<uint8_t>(PIPGUI_SIM_BTN_NEXT_PIN);
-#else
-            20U;
-#endif
-        constexpr uint8_t kSelectPin =
-#ifdef PIPGUI_SIM_BTN_SELECT_PIN
-            static_cast<uint8_t>(PIPGUI_SIM_BTN_SELECT_PIN);
-#else
-            21U;
-#endif
-
-        [[nodiscard]] uint64_t monotonicMicros() noexcept
-        {
-            using clock = std::chrono::steady_clock;
-            static const clock::time_point start = clock::now();
-            const auto delta = std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - start);
-            return static_cast<uint64_t>(delta.count());
-        }
-
-        template <typename T>
-        void safeRelease(T *&ptr) noexcept
-        {
-            if (ptr)
-            {
-                ptr->Release();
-                ptr = nullptr;
-            }
-        }
-
-        void enableDpiAwareness() noexcept
-        {
-            static bool applied = false;
-            if (applied)
-                return;
-
-            applied = true;
-
-            HMODULE user32 = GetModuleHandleW(L"user32.dll");
-            if (!user32)
-                return;
-
-            using SetThreadDpiAwarenessContextFn = DPI_AWARENESS_CONTEXT(WINAPI *)(DPI_AWARENESS_CONTEXT);
-            using SetProcessDpiAwarenessContextFn = BOOL(WINAPI *)(DPI_AWARENESS_CONTEXT);
-            using SetProcessDPIAwareFn = BOOL(WINAPI *)(void);
-
-            if (auto setThreadDpiAwarenessContext =
-                    reinterpret_cast<SetThreadDpiAwarenessContextFn>(GetProcAddress(user32, "SetThreadDpiAwarenessContext")))
-            {
-                setThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-                return;
-            }
-
-            if (auto setProcessDpiAwarenessContext =
-                    reinterpret_cast<SetProcessDpiAwarenessContextFn>(GetProcAddress(user32, "SetProcessDpiAwarenessContext")))
-            {
-                setProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-                return;
-            }
-
-            if (auto setProcessDPIAware =
-                    reinterpret_cast<SetProcessDPIAwareFn>(GetProcAddress(user32, "SetProcessDPIAware")))
-            {
-                setProcessDPIAware();
-            }
-        }
-
-        [[nodiscard]] std::string makeBaseWindowTitle() noexcept
-        {
-            namespace fs = std::filesystem;
-            try
-            {
-                fs::path cwd = fs::current_path();
-                fs::path projectDir = (cwd.filename() == ".sim") ? cwd.parent_path() : cwd;
-                const std::string name = projectDir.filename().string();
-                if (!name.empty())
-                    return name + " Simulator";
-            }
-            catch (...)
-            {
-            }
-
-            return "Simulator";
-        }
-
-        [[nodiscard]] std::wstring widenAscii(const std::string &text)
-        {
-            return std::wstring(text.begin(), text.end());
-        }
-
-        [[nodiscard]] bool windowsAppsUseDarkTheme() noexcept
-        {
-            DWORD value = 1;
-            DWORD bytes = sizeof(value);
-            const LSTATUS rc = RegGetValueW(HKEY_CURRENT_USER,
-                                            L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                                            L"AppsUseLightTheme",
-                                            RRF_RT_REG_DWORD,
-                                            nullptr,
-                                            &value,
-                                            &bytes);
-            return rc == ERROR_SUCCESS && value == 0;
-        }
-
-        void applyTitleBarTheme(HWND hwnd) noexcept
-        {
-            if (!hwnd)
-                return;
-
-            const BOOL dark = windowsAppsUseDarkTheme() ? TRUE : FALSE;
-            constexpr DWORD kDwmUseImmersiveDarkMode = 20;
-            constexpr DWORD kDwmUseImmersiveDarkModeOld = 19;
-            (void)DwmSetWindowAttribute(hwnd, kDwmUseImmersiveDarkMode, &dark, sizeof(dark));
-            (void)DwmSetWindowAttribute(hwnd, kDwmUseImmersiveDarkModeOld, &dark, sizeof(dark));
-        }
-    }
-
-    Runtime &Runtime::instance() noexcept
-    {
-        static Runtime runtime;
-        return runtime;
-    }
-
-    Runtime::Runtime() noexcept
-        : _instance(GetModuleHandleW(nullptr)),
-          _windowTitle(makeBaseWindowTitle())
-    {
-        _scale =
-#ifdef PIPGUI_SIM_SCALE
-            static_cast<uint8_t>(PIPGUI_SIM_SCALE);
-#else
-            2U;
-#endif
-        std::memset(&_bitmapInfo, 0, sizeof(_bitmapInfo));
-    }
-
-    bool Runtime::configureDisplay(uint16_t width, uint16_t height) noexcept
-    {
-        if (width == 0 || height == 0)
-            return false;
-
-        _baseWidth = width;
-        _baseHeight = height;
-        return setDisplayRotation(_rotation);
-    }
-
-    bool Runtime::beginDisplay(uint8_t rotation) noexcept
-    {
-        return setDisplayRotation(rotation & 3U) && ensureWindow();
-    }
-
-    bool Runtime::setDisplayRotation(uint8_t rotation) noexcept
-    {
-        if (_baseWidth == 0 || _baseHeight == 0)
-            return false;
-
-        _rotation = rotation & 3U;
-        const bool quarterTurn = ((_rotation & 1U) != 0U);
-        _width = quarterTurn ? _baseHeight : _baseWidth;
-        _height = quarterTurn ? _baseWidth : _baseHeight;
-
-        _framebuffer.assign(static_cast<size_t>(_width) * static_cast<size_t>(_height), 0xFF000000u);
-        updateBitmapInfo();
-        resizeWindow();
-        requestPresent();
-        return true;
-    }
-
-    void Runtime::fillScreen565(uint16_t color565) noexcept
-    {
-        if (_framebuffer.empty())
-            return;
-
-        std::fill(_framebuffer.begin(), _framebuffer.end(), color565ToArgb(color565));
-        requestPresent();
-    }
-
-    void Runtime::writeRect565(int16_t x,
-                               int16_t y,
-                               int16_t w,
-                               int16_t h,
-                               const uint16_t *pixels,
-                               int32_t stridePixels) noexcept
-    {
-        if (!pixels || w <= 0 || h <= 0 || stridePixels <= 0 || _framebuffer.empty())
-            return;
-
-        const int32_t dstX1 = std::max<int32_t>(0, x);
-        const int32_t dstY1 = std::max<int32_t>(0, y);
-        const int32_t dstX2 = std::min<int32_t>(_width, static_cast<int32_t>(x) + w);
-        const int32_t dstY2 = std::min<int32_t>(_height, static_cast<int32_t>(y) + h);
-        if (dstX1 >= dstX2 || dstY1 >= dstY2)
-            return;
-
-        throttleSpiTransfer(static_cast<size_t>(dstX2 - dstX1) * static_cast<size_t>(dstY2 - dstY1));
-
-        const int32_t srcOffsetX = dstX1 - x;
-        const int32_t srcOffsetY = dstY1 - y;
-
-        for (int32_t row = dstY1; row < dstY2; ++row)
-        {
-            uint32_t *dst = _framebuffer.data() + static_cast<size_t>(row) * _width + dstX1;
-            const uint16_t *src = pixels + static_cast<size_t>(srcOffsetY + (row - dstY1)) * static_cast<size_t>(stridePixels) + srcOffsetX;
-            for (int32_t col = dstX1; col < dstX2; ++col)
-            {
-                *dst++ = color565ToArgb(__builtin_bswap16(*src++));
-            }
-        }
-
-        requestPresent();
-    }
-
-    void Runtime::pumpEvents() noexcept
-    {
-        if (_hwnd == nullptr && _baseWidth > 0 && _baseHeight > 0)
-            (void)ensureWindow();
-
-        MSG msg = {};
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
-        {
-            if (msg.message == WM_QUIT)
-            {
-                _shouldQuit = true;
-                return;
-            }
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-
-        const uint64_t nowUs = monotonicMicros();
-        serviceSimClock(nowUs);
-        if (_statusUntilUs != 0 && nowUs >= _statusUntilUs)
-        {
-            _statusUntilUs = 0;
-            _statusText.clear();
-            refreshWindowTitle();
-        }
-
-        serviceRecording(nowUs);
-        if (_dirty && (_lastPresentUs == 0 || (nowUs - _lastPresentUs) >= 16'000U))
-            presentNow();
-    }
-
-    void Runtime::pinModeInput(uint8_t pin, pipcore::InputMode mode) noexcept
-    {
-        _pinModes[pin] = mode;
-    }
-
-    bool Runtime::digitalRead(uint8_t pin) const noexcept
-    {
-        const bool pressed = pinPressed(pin);
-        switch (_pinModes[pin])
-        {
-        case pipcore::InputMode::Pullup:
-            return !pressed;
-        case pipcore::InputMode::Pulldown:
-            return pressed;
-        default:
-            return pressed;
-        }
-    }
-
-    uint32_t Runtime::nowMs() noexcept
-    {
-        pumpEvents();
-        return static_cast<uint32_t>(_simClockUs / 1000U);
-    }
-
-    uint64_t Runtime::nowMicros() noexcept
-    {
-        pumpEvents();
-        return _simClockUs;
-    }
-
-    void Runtime::delayMs(uint32_t ms) noexcept
-    {
-        const uint64_t endUs = _simClockUs + static_cast<uint64_t>(ms) * 1000U;
-        while (!shouldQuit() && _simClockUs < endUs)
-        {
-            pumpEvents();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-
-    int Runtime::serialAvailable() noexcept
-    {
-        pumpEvents();
-        return static_cast<int>(_serialInput.size() - _serialReadOffset);
-    }
-
-    int Runtime::serialRead() noexcept
-    {
-        pumpEvents();
-        if (_serialReadOffset >= _serialInput.size())
-            return -1;
-
-        const int value = static_cast<unsigned char>(_serialInput[_serialReadOffset++]);
-        if (_serialReadOffset >= _serialInput.size())
-        {
-            _serialInput.clear();
-            _serialReadOffset = 0;
-        }
-        return value;
-    }
-
-    size_t Runtime::serialWrite(const uint8_t *data, size_t len) noexcept
-    {
-        if (!data || len == 0)
-            return 0;
-
-        std::cout.write(reinterpret_cast<const char *>(data), static_cast<std::streamsize>(len));
-        std::cout.flush();
-        return len;
-    }
-
-    size_t Runtime::serialWrite(uint8_t value) noexcept
-    {
-        return serialWrite(&value, 1U);
-    }
-
-    void Runtime::serviceSimClock(uint64_t realNowUs) noexcept
-    {
-        if (_lastRealClockUs == 0)
-        {
-            _lastRealClockUs = realNowUs;
-            return;
-        }
-
-        const uint64_t realDelta = realNowUs - _lastRealClockUs;
-        _lastRealClockUs = realNowUs;
-
-        if (_pendingFrameSteps != 0)
-        {
-            --_pendingFrameSteps;
-            _simClockUs += 16'667U;
-            return;
-        }
-
-        if (!_paused)
-            _simClockUs += (realDelta * _timeScalePercent) / 100U;
-    }
-
-    void Runtime::advanceFrameStep() noexcept
-    {
-        ++_pendingFrameSteps;
-    }
-
-    void Runtime::throttleSpiTransfer(size_t pixelCount) noexcept
-    {
-        if (_spiLimitBytesPerSec == 0 || pixelCount == 0)
-            return;
-
-        const uint64_t nowUs = monotonicMicros();
-        const uint64_t bytes = pixelCount * 2U;
-        const uint64_t transferUs = (bytes * 1'000'000ULL + (_spiLimitBytesPerSec - 1U)) / _spiLimitBytesPerSec;
-        if (_spiReadyUs < nowUs)
-            _spiReadyUs = nowUs;
-        _spiReadyUs += transferUs;
-
-        while (!shouldQuit())
-        {
-            const uint64_t currentUs = monotonicMicros();
-            if (currentUs >= _spiReadyUs)
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-
-    uint32_t Runtime::presentColor(uint32_t argb) const noexcept
-    {
-        if (!_rgb565Preview)
-            return argb;
-
-        const uint8_t r = static_cast<uint8_t>((argb >> 16) & 0xFFU);
-        const uint8_t g = static_cast<uint8_t>((argb >> 8) & 0xFFU);
-        const uint8_t b = static_cast<uint8_t>(argb & 0xFFU);
-        const uint16_t c565 = static_cast<uint16_t>(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
-        return color565ToArgb(c565);
-    }
-
-    void Runtime::togglePause() noexcept
-    {
-        _paused = !_paused;
-        setTransientStatus(_paused ? "Paused" : "Running");
-    }
-
-    void Runtime::stepFrame() noexcept
-    {
-        advanceFrameStep();
-        setTransientStatus("Step frame");
-    }
-
-    void Runtime::cycleTimeScale() noexcept
-    {
-        if (_timeScalePercent == 100)
-            _timeScalePercent = 50;
-        else if (_timeScalePercent == 50)
-            _timeScalePercent = 25;
-        else if (_timeScalePercent == 25)
-            _timeScalePercent = 10;
-        else
-            _timeScalePercent = 100;
-        setTransientStatus(("Time " + std::to_string(_timeScalePercent) + "%").c_str());
-    }
-
-    void Runtime::cycleSpiLimit() noexcept
-    {
-        if (_spiLimitBytesPerSec == 0)
-            _spiLimitBytesPerSec = 40'000'000U / 8U;
-        else if (_spiLimitBytesPerSec == 40'000'000U / 8U)
-            _spiLimitBytesPerSec = 27'000'000U / 8U;
-        else if (_spiLimitBytesPerSec == 27'000'000U / 8U)
-            _spiLimitBytesPerSec = 10'000'000U / 8U;
-        else
-            _spiLimitBytesPerSec = 0;
-
-        if (_spiLimitBytesPerSec == 0)
-            setTransientStatus("SPI unlimited");
-        else
-            setTransientStatus(("SPI " + std::to_string((_spiLimitBytesPerSec * 8U) / 1'000'000U) + " MHz").c_str());
-    }
-
-    void Runtime::toggleRgb565Preview() noexcept
-    {
-        _rgb565Preview = !_rgb565Preview;
-        setTransientStatus(_rgb565Preview ? "RGB565 preview" : "RGB888 preview");
-        requestPresent();
-    }
-
-    void Runtime::toggleConsole() noexcept
-    {
-        if (_consoleOpen)
-        {
-            setTransientStatus("Console already open");
-            return;
-        }
-
-        if (AllocConsole())
-        {
-            FILE *ignored = nullptr;
-            (void)freopen_s(&ignored, "CONOUT$", "w", stdout);
-            (void)freopen_s(&ignored, "CONOUT$", "w", stderr);
-            (void)freopen_s(&ignored, "CONIN$", "r", stdin);
-            _consoleOpen = true;
-            setTransientStatus("Console open");
-            logLine("console attached");
-        }
-        else
-        {
-            setTransientStatus("Console failed");
-        }
-    }
-
-    void Runtime::logLine(const char *message) noexcept
-    {
-        if (message)
-            std::cerr << "[sim] " << message << std::endl;
-    }
-
-    bool Runtime::ensureWindow() noexcept
-    {
-        if (_hwnd)
-            return true;
-        if (_width == 0 || _height == 0)
-            return false;
-
-        enableDpiAwareness();
-
-        static bool classRegistered = false;
-        if (!classRegistered)
-        {
-            WNDCLASSEXW wc = {};
-            wc.cbSize = sizeof(wc);
-            wc.hInstance = _instance;
-            wc.lpfnWndProc = &Runtime::WindowProc;
-            wc.lpszClassName = kWindowClassName;
-            wc.hCursor = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
-            wc.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-            if (!RegisterClassExW(&wc))
-            {
-                const DWORD err = GetLastError();
-                if (err != ERROR_CLASS_ALREADY_EXISTS)
-                    return false;
-            }
-            classRegistered = true;
-        }
-
-        RECT rect = {0, 0, static_cast<LONG>(_width * _scale), static_cast<LONG>(_height * _scale)};
-        AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
-
-        _hwnd = CreateWindowExW(0,
-                                kWindowClassName,
-                                widenAscii(_windowTitle).c_str(),
-                                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                                CW_USEDEFAULT,
-                                CW_USEDEFAULT,
-                                rect.right - rect.left,
-                                rect.bottom - rect.top,
-                                nullptr,
-                                nullptr,
-                                _instance,
-                                this);
-        if (!_hwnd)
-            return false;
-
-        applyTitleBarTheme(_hwnd);
-        refreshWindowTitle();
-        ShowWindow(_hwnd, SW_SHOW);
-        UpdateWindow(_hwnd);
-        return true;
-    }
-
-    void Runtime::resizeWindow() noexcept
-    {
-        if (!_hwnd)
-            return;
-
-        RECT rect = {0, 0, static_cast<LONG>(_width * _scale), static_cast<LONG>(_height * _scale)};
-        AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
-        SetWindowPos(_hwnd, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
-
-    void Runtime::updateBitmapInfo() noexcept
-    {
-        std::memset(&_bitmapInfo, 0, sizeof(_bitmapInfo));
-        _bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        _bitmapInfo.bmiHeader.biWidth = static_cast<LONG>(_width);
-        _bitmapInfo.bmiHeader.biHeight = -static_cast<LONG>(_height);
-        _bitmapInfo.bmiHeader.biPlanes = 1;
-        _bitmapInfo.bmiHeader.biBitCount = 32;
-        _bitmapInfo.bmiHeader.biCompression = BI_RGB;
-    }
-
-    void Runtime::requestPresent() noexcept
-    {
-        _dirty = true;
-        if (_hwnd)
-            InvalidateRect(_hwnd, nullptr, FALSE);
-    }
-
-    void Runtime::presentNow() noexcept
-    {
-        if (!_hwnd)
-            return;
-        _dirty = false;
-        _lastPresentUs = monotonicMicros();
-        RedrawWindow(_hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
-    }
-
-    void Runtime::serviceRecording(uint64_t nowUs) noexcept
-    {
-        if (!_recording.active)
-            return;
-
-        while (_recording.active && nowUs >= _recording.nextFrameUs)
-        {
-            const int64_t sampleTime = static_cast<int64_t>(_recording.frameIndex) * _recording.frameDuration;
-            if (!encodeRecordingFrame(sampleTime))
-            {
-                stopRecording();
-                setTransientStatus("Video failed");
-                break;
-            }
-
-            ++_recording.frameIndex;
-            _recording.nextFrameUs += 1'000'000ULL / _recording.fps;
-        }
-    }
-
-    bool Runtime::restartProcess() noexcept
-    {
-        wchar_t exePath[MAX_PATH] = {};
-        if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) == 0)
-            return false;
-
-        wchar_t workDir[MAX_PATH] = {};
-        if (GetCurrentDirectoryW(MAX_PATH, workDir) == 0)
-            return false;
-
-        STARTUPINFOW si = {};
-        PROCESS_INFORMATION pi = {};
-        si.cb = sizeof(si);
-
-        const BOOL ok = CreateProcessW(exePath,
-                                       nullptr,
-                                       nullptr,
-                                       nullptr,
-                                       FALSE,
-                                       0,
-                                       nullptr,
-                                       workDir,
-                                       &si,
-                                       &pi);
-        if (!ok)
-            return false;
-
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-
-        if (_hwnd)
-            PostMessageW(_hwnd, WM_CLOSE, 0, 0);
-        else
-            _shouldQuit = true;
-
-        return true;
-    }
-
-    bool Runtime::saveScreenshot() noexcept
-    {
-        if (_framebuffer.empty() || _width == 0 || _height == 0)
-            return false;
-
-        try
-        {
-            namespace fs = std::filesystem;
-            fs::path dir = fs::current_path() / "shots";
-            fs::create_directories(dir);
-
-            SYSTEMTIME st = {};
-            GetLocalTime(&st);
-
-            wchar_t nameBuf[128];
-            std::swprintf(nameBuf,
-                          sizeof(nameBuf) / sizeof(nameBuf[0]),
-                          L"pipgui_%04u%02u%02u_%02u%02u%02u_%03u.png",
-                          static_cast<unsigned>(st.wYear),
-                          static_cast<unsigned>(st.wMonth),
-                          static_cast<unsigned>(st.wDay),
-                          static_cast<unsigned>(st.wHour),
-                          static_cast<unsigned>(st.wMinute),
-                          static_cast<unsigned>(st.wSecond),
-                          static_cast<unsigned>(st.wMilliseconds));
-
-            const fs::path outPath = dir / nameBuf;
-
-            HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-            const bool shouldUninit = SUCCEEDED(hr);
-            if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
-                return false;
-
-            IWICImagingFactory *factory = nullptr;
-            IWICBitmapEncoder *encoder = nullptr;
-            IWICStream *stream = nullptr;
-            IWICBitmapFrameEncode *frame = nullptr;
-            IPropertyBag2 *props = nullptr;
-
-            hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                                  IID_PPV_ARGS(&factory));
-            if (SUCCEEDED(hr))
-                hr = factory->CreateStream(&stream);
-            if (SUCCEEDED(hr))
-                hr = stream->InitializeFromFilename(outPath.c_str(), GENERIC_WRITE);
-            if (SUCCEEDED(hr))
-                hr = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
-            if (SUCCEEDED(hr))
-                hr = encoder->Initialize(stream, WICBitmapEncoderNoCache);
-            if (SUCCEEDED(hr))
-                hr = encoder->CreateNewFrame(&frame, &props);
-            if (SUCCEEDED(hr))
-                hr = frame->Initialize(props);
-            if (SUCCEEDED(hr))
-                hr = frame->SetSize(_width, _height);
-            WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
-            if (SUCCEEDED(hr))
-                hr = frame->SetPixelFormat(&format);
-            if (SUCCEEDED(hr))
-                hr = frame->WritePixels(_height,
-                                        static_cast<UINT>(_width) * 4U,
-                                        static_cast<UINT>(_framebuffer.size() * sizeof(uint32_t)),
-                                        reinterpret_cast<BYTE *>(_framebuffer.data()));
-            if (SUCCEEDED(hr))
-                hr = frame->Commit();
-            if (SUCCEEDED(hr))
-                hr = encoder->Commit();
-
-            safeRelease(props);
-            safeRelease(frame);
-            safeRelease(encoder);
-            safeRelease(stream);
-            safeRelease(factory);
-            if (shouldUninit)
-                CoUninitialize();
-
-            if (FAILED(hr))
-                return false;
-
-            setTransientStatus("Screenshot saved");
-            return true;
-        }
-        catch (...)
-        {
-            setTransientStatus("Screenshot failed");
-            return false;
-        }
-    }
-
-    bool Runtime::toggleRecording() noexcept
-    {
-        if (_recording.active)
-        {
-            stopRecording();
-            setTransientStatus("Recording stopped");
-            return true;
-        }
-
-        if (startRecording())
-        {
-            setTransientStatus("Recording started");
-            return true;
-        }
-
-        setTransientStatus("Recording failed");
-        return false;
-    }
-
-    bool Runtime::startRecording() noexcept
-    {
-        if (_recording.active || _framebuffer.empty() || _width == 0 || _height == 0)
-            return false;
-
-        HRESULT hr = MFStartup(MF_VERSION);
-        if (FAILED(hr))
-            return false;
-
-        namespace fs = std::filesystem;
-        fs::create_directories(fs::current_path() / "videos");
-
-        SYSTEMTIME st = {};
-        GetLocalTime(&st);
-        wchar_t nameBuf[128];
-        std::swprintf(nameBuf,
-                      sizeof(nameBuf) / sizeof(nameBuf[0]),
-                      L"pipgui_%04u%02u%02u_%02u%02u%02u_%03u.mp4",
-                      static_cast<unsigned>(st.wYear),
-                      static_cast<unsigned>(st.wMonth),
-                      static_cast<unsigned>(st.wDay),
-                      static_cast<unsigned>(st.wHour),
-                      static_cast<unsigned>(st.wMinute),
-                      static_cast<unsigned>(st.wSecond),
-                      static_cast<unsigned>(st.wMilliseconds));
-
-        const std::wstring outPath = (fs::current_path() / "videos" / nameBuf).wstring();
-
-        IMFAttributes *attrs = nullptr;
-        IMFSinkWriter *writer = nullptr;
-        IMFMediaType *outType = nullptr;
-        IMFMediaType *inType = nullptr;
-        DWORD streamIndex = 0;
-
-        hr = MFCreateAttributes(&attrs, 1);
-        if (SUCCEEDED(hr))
-            hr = attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
-        if (SUCCEEDED(hr))
-            hr = MFCreateSinkWriterFromURL(outPath.c_str(), nullptr, attrs, &writer);
-        if (SUCCEEDED(hr))
-            hr = MFCreateMediaType(&outType);
-        if (SUCCEEDED(hr))
-            hr = outType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-        if (SUCCEEDED(hr))
-            hr = outType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
-        if (SUCCEEDED(hr))
-            hr = outType->SetUINT32(MF_MT_AVG_BITRATE, 6'000'000);
-        if (SUCCEEDED(hr))
-            hr = MFSetAttributeSize(outType, MF_MT_FRAME_SIZE, _width, _height);
-        if (SUCCEEDED(hr))
-            hr = MFSetAttributeRatio(outType, MF_MT_FRAME_RATE, 30, 1);
-        if (SUCCEEDED(hr))
-            hr = MFSetAttributeRatio(outType, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-        if (SUCCEEDED(hr))
-            hr = writer->AddStream(outType, &streamIndex);
-        if (SUCCEEDED(hr))
-            hr = MFCreateMediaType(&inType);
-        if (SUCCEEDED(hr))
-            hr = inType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-        if (SUCCEEDED(hr))
-            hr = inType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
-        if (SUCCEEDED(hr))
-            hr = MFSetAttributeSize(inType, MF_MT_FRAME_SIZE, _width, _height);
-        if (SUCCEEDED(hr))
-            hr = MFSetAttributeRatio(inType, MF_MT_FRAME_RATE, 30, 1);
-        if (SUCCEEDED(hr))
-            hr = MFSetAttributeRatio(inType, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-        if (SUCCEEDED(hr))
-            hr = writer->SetInputMediaType(streamIndex, inType, nullptr);
-        if (SUCCEEDED(hr))
-            hr = writer->BeginWriting();
-
-        safeRelease(inType);
-        safeRelease(outType);
-        safeRelease(attrs);
-
-        if (FAILED(hr))
-        {
-            safeRelease(writer);
-            MFShutdown();
-            return false;
-        }
-
-        _recording.writer = writer;
-        _recording.streamIndex = streamIndex;
-        _recording.fps = 30;
-        _recording.frameDuration = 10'000'000LL / static_cast<int64_t>(_recording.fps);
-        _recording.frameIndex = 0;
-        _recording.nextFrameUs = monotonicMicros();
-        _recording.scratch.assign(_framebuffer.size(), 0);
-        _recording.active = true;
-        refreshWindowTitle();
-        return true;
-    }
-
-    void Runtime::stopRecording() noexcept
-    {
-        if (!_recording.active)
-            return;
-
-        IMFSinkWriter *writer = static_cast<IMFSinkWriter *>(_recording.writer);
-        if (writer)
-        {
-            writer->Finalize();
-            writer->Release();
-        }
-
-        _recording = {};
-        MFShutdown();
-        refreshWindowTitle();
-    }
-
-    bool Runtime::encodeRecordingFrame(int64_t sampleTimeHns) noexcept
-    {
-        if (!_recording.active || _framebuffer.empty())
-            return false;
-
-        IMFSinkWriter *writer = static_cast<IMFSinkWriter *>(_recording.writer);
-        if (!writer)
-            return false;
-
-        IMFSample *sample = nullptr;
-        IMFMediaBuffer *buffer = nullptr;
-        const DWORD frameBytes = static_cast<DWORD>(_framebuffer.size() * sizeof(uint32_t));
-        const size_t rowPixels = static_cast<size_t>(_width);
-
-        if (_recording.scratch.size() != _framebuffer.size())
-            _recording.scratch.resize(_framebuffer.size());
-
-        for (uint32_t row = 0; row < _height; ++row)
-        {
-            const uint32_t *src = _framebuffer.data() + static_cast<size_t>(_height - 1U - row) * rowPixels;
-            uint32_t *dstRow = _recording.scratch.data() + static_cast<size_t>(row) * rowPixels;
-            std::memcpy(dstRow, src, rowPixels * sizeof(uint32_t));
-        }
-
-        HRESULT hr = MFCreateMemoryBuffer(frameBytes, &buffer);
-        BYTE *dst = nullptr;
-        if (SUCCEEDED(hr))
-            hr = buffer->Lock(&dst, nullptr, nullptr);
-        if (SUCCEEDED(hr))
-            std::memcpy(dst, _recording.scratch.data(), frameBytes);
-        if (SUCCEEDED(hr))
-            hr = buffer->Unlock();
-        if (SUCCEEDED(hr))
-            hr = buffer->SetCurrentLength(frameBytes);
-        if (SUCCEEDED(hr))
-            hr = MFCreateSample(&sample);
-        if (SUCCEEDED(hr))
-            hr = sample->AddBuffer(buffer);
-        if (SUCCEEDED(hr))
-            hr = sample->SetSampleTime(sampleTimeHns);
-        if (SUCCEEDED(hr))
-            hr = sample->SetSampleDuration(_recording.frameDuration);
-        if (SUCCEEDED(hr))
-            hr = writer->WriteSample(_recording.streamIndex, sample);
-
-        safeRelease(sample);
-        safeRelease(buffer);
-        return SUCCEEDED(hr);
-    }
-
-    void Runtime::setTransientStatus(const char *message, uint32_t durationMs) noexcept
-    {
-        _statusText = message ? message : "";
-        _statusUntilUs = monotonicMicros() + static_cast<uint64_t>(durationMs) * 1000ULL;
-        refreshWindowTitle();
-    }
-
-    void Runtime::refreshWindowTitle() noexcept
-    {
-        if (!_hwnd)
-            return;
-
-        std::string title = _windowTitle;
-        title += _paused ? "  |  PAUSE" : "  |  RUN";
-        if (_timeScalePercent != 100)
-            title += "  |  " + std::to_string(_timeScalePercent) + "%";
-        if (_spiLimitBytesPerSec != 0)
-            title += "  |  SPI " + std::to_string((_spiLimitBytesPerSec * 8U) / 1'000'000U) + "MHz";
-        if (_rgb565Preview)
-            title += "  |  RGB565";
-        if (_recording.active)
-            title += "  |  REC";
-        if (!_statusText.empty())
-        {
-            title += "  |  ";
-            title += _statusText;
-        }
-        SetWindowTextW(_hwnd, widenAscii(title).c_str());
-    }
-
-    void Runtime::handleKey(UINT vk, bool down) noexcept
-    {
-        switch (vk)
-        {
-        case VK_LEFT:
-        case 'A':
-            _prevDown = down;
-            break;
-        case VK_RIGHT:
-        case 'D':
-            _nextDown = down;
-            break;
-        case VK_RETURN:
-        case VK_SPACE:
-            _selectDown = down;
-            break;
-        case VK_F4:
+        case WXK_F1:
             if (down)
                 togglePause();
             break;
-        case VK_F5:
+        case WXK_F2:
+            if (down)
+                stepBack();
+            break;
+        case WXK_F3:
             if (down)
                 stepFrame();
-            break;
-        case VK_F6:
-            if (down)
-                toggleRgb565Preview();
-            break;
-        case VK_F7:
-            if (down)
-                cycleSpiLimit();
-            break;
-        case VK_F8:
-            if (down)
-                cycleTimeScale();
-            break;
-        case VK_F9:
-            if (down)
-                toggleConsole();
-            break;
-        default:
-            break;
-        }
-    }
-
-    void Runtime::pushSerialChar(char ch) noexcept
-    {
-        if (_serialReadOffset != 0 && _serialReadOffset >= _serialInput.size())
-        {
-            _serialInput.clear();
-            _serialReadOffset = 0;
-        }
-        _serialInput.push_back(ch);
-    }
-
-    bool Runtime::pinPressed(uint8_t pin) const noexcept
-    {
-        if (pin == kPrevPin)
-            return _prevDown;
-        if (pin == kNextPin)
-            return _nextDown;
-        if (pin == kSelectPin)
-            return _selectDown;
-        return false;
-    }
-
-    LRESULT CALLBACK Runtime::WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) noexcept
-    {
-        Runtime *self = reinterpret_cast<Runtime *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-        if (msg == WM_NCCREATE)
-        {
-            const auto *cs = reinterpret_cast<const CREATESTRUCTW *>(lParam);
-            self = static_cast<Runtime *>(cs->lpCreateParams);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        }
-
-        if (!self)
-            return DefWindowProcW(hwnd, msg, wParam, lParam);
-
-        switch (msg)
-        {
-        case WM_CLOSE:
-            DestroyWindow(hwnd);
-            return 0;
-        case WM_DESTROY:
-            if (self->_recording.active)
-                self->stopRecording();
-            self->_prevDown = false;
-            self->_nextDown = false;
-            self->_selectDown = false;
-            self->_dirty = false;
-            self->_statusText.clear();
-            self->_statusUntilUs = 0;
-            self->_shouldQuit = true;
-            self->_hwnd = nullptr;
-            PostQuitMessage(0);
-            return 0;
-        case WM_SETTINGCHANGE:
-            applyTitleBarTheme(hwnd);
-            return 0;
-        case WM_KEYDOWN:
-        case WM_SYSKEYDOWN:
-            if ((lParam & (1LL << 30)) == 0)
-            {
-                if (wParam == VK_F1)
-                {
-                    (void)self->restartProcess();
-                    return 0;
-                }
-                if (wParam == VK_F2)
-                {
-                    (void)self->saveScreenshot();
-                    return 0;
-                }
-                if (wParam == VK_F3)
-                {
-                    (void)self->toggleRecording();
-                    return 0;
-                }
-            }
-            self->handleKey(static_cast<UINT>(wParam), true);
-            return 0;
-        case WM_KEYUP:
-        case WM_SYSKEYUP:
-            self->handleKey(static_cast<UINT>(wParam), false);
-            return 0;
-        case WM_CHAR:
-            if (wParam >= L'0' && wParam <= L'3')
-                self->pushSerialChar(static_cast<char>(wParam));
-            return 0;
-        case WM_PAINT:
-        {
-            PAINTSTRUCT ps = {};
-            HDC dc = BeginPaint(hwnd, &ps);
-            RECT client = {};
-            GetClientRect(hwnd, &client);
-            if (!self->_framebuffer.empty())
-            {
-                SetStretchBltMode(dc, COLORONCOLOR);
-                StretchDIBits(dc,
-                              0,
-                              0,
-                              client.right - client.left,
-                              client.bottom - client.top,
-                              0,
-                              0,
-                              self->_width,
-                              self->_height,
-                              self->_framebuffer.data(),
-                              &self->_bitmapInfo,
-                              DIB_RGB_COLORS,
-                              SRCCOPY);
-            }
-            EndPaint(hwnd, &ps);
-            return 0;
-        }
-        default:
-            return DefWindowProcW(hwnd, msg, wParam, lParam);
-        }
-    }
-
-    uint32_t Runtime::color565ToArgb(uint16_t color565) noexcept
-    {
-        const uint8_t r5 = static_cast<uint8_t>((color565 >> 11) & 0x1Fu);
-        const uint8_t g6 = static_cast<uint8_t>((color565 >> 5) & 0x3Fu);
-        const uint8_t b5 = static_cast<uint8_t>(color565 & 0x1Fu);
-
-        const uint8_t r8 = static_cast<uint8_t>((r5 * 255U + 15U) / 31U);
-        const uint8_t g8 = static_cast<uint8_t>((g6 * 255U + 31U) / 63U);
-        const uint8_t b8 = static_cast<uint8_t>((b5 * 255U + 15U) / 31U);
-        return 0xFF000000u | (static_cast<uint32_t>(r8) << 16) | (static_cast<uint32_t>(g8) << 8) | b8;
-    }
-}
-
-#elif defined(__linux__)
-
-#include <PipCore/Platforms/Desktop/Runtime.hpp>
-#include <SDL2/SDL.h>
-#include <algorithm>
-#include <chrono>
-#include <csignal>
-#include <cstdio>
-#include <ctime>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <string>
-#include <thread>
-#include <unistd.h>
-
-namespace pipcore::desktop
-{
-    namespace
-    {
-        constexpr uint8_t kPrevPin =
-#ifdef PIPGUI_SIM_BTN_PREV_PIN
-            static_cast<uint8_t>(PIPGUI_SIM_BTN_PREV_PIN);
-#else
-            4U;
-#endif
-        constexpr uint8_t kNextPin =
-#ifdef PIPGUI_SIM_BTN_NEXT_PIN
-            static_cast<uint8_t>(PIPGUI_SIM_BTN_NEXT_PIN);
-#else
-            20U;
-#endif
-        constexpr uint8_t kSelectPin =
-#ifdef PIPGUI_SIM_BTN_SELECT_PIN
-            static_cast<uint8_t>(PIPGUI_SIM_BTN_SELECT_PIN);
-#else
-            21U;
-#endif
-
-        [[nodiscard]] uint64_t monotonicMicros() noexcept
-        {
-            using clock = std::chrono::steady_clock;
-            static const clock::time_point start = clock::now();
-            const auto delta = std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - start);
-            return static_cast<uint64_t>(delta.count());
-        }
-
-        [[nodiscard]] std::string makeBaseWindowTitle() noexcept
-        {
-            namespace fs = std::filesystem;
-            try
-            {
-                fs::path cwd = fs::current_path();
-                fs::path projectDir = (cwd.filename() == ".sim") ? cwd.parent_path() : cwd;
-                const std::string name = projectDir.filename().string();
-                if (!name.empty())
-                    return name + " Simulator";
-            }
-            catch (...)
-            {
-            }
-
-            return "Simulator";
-        }
-
-        [[nodiscard]] std::string shellQuote(const std::string &text)
-        {
-            std::string out = "'";
-            for (char ch : text)
-            {
-                if (ch == '\'')
-                    out += "'\\''";
-                else
-                    out += ch;
-            }
-            out += "'";
-            return out;
-        }
-    }
-
-    Runtime &Runtime::instance() noexcept
-    {
-        static Runtime runtime;
-        return runtime;
-    }
-
-    Runtime::Runtime() noexcept
-        : _windowTitle(makeBaseWindowTitle())
-    {
-        _scale =
-#ifdef PIPGUI_SIM_SCALE
-            static_cast<uint8_t>(PIPGUI_SIM_SCALE);
-#else
-            2U;
-#endif
-    }
-
-    bool Runtime::configureDisplay(uint16_t width, uint16_t height) noexcept
-    {
-        if (width == 0 || height == 0)
-            return false;
-
-        _baseWidth = width;
-        _baseHeight = height;
-        return setDisplayRotation(_rotation);
-    }
-
-    bool Runtime::beginDisplay(uint8_t rotation) noexcept
-    {
-        return setDisplayRotation(rotation & 3U) && ensureWindow();
-    }
-
-    bool Runtime::setDisplayRotation(uint8_t rotation) noexcept
-    {
-        if (_baseWidth == 0 || _baseHeight == 0)
-            return false;
-
-        _rotation = rotation & 3U;
-        const bool quarterTurn = ((_rotation & 1U) != 0U);
-        _width = quarterTurn ? _baseHeight : _baseWidth;
-        _height = quarterTurn ? _baseWidth : _baseHeight;
-
-        _framebuffer.assign(static_cast<size_t>(_width) * static_cast<size_t>(_height), 0xFF000000u);
-        updateBitmapInfo();
-        resizeWindow();
-        requestPresent();
-        return true;
-    }
-
-    void Runtime::fillScreen565(uint16_t color565) noexcept
-    {
-        if (_framebuffer.empty())
-            return;
-
-        std::fill(_framebuffer.begin(), _framebuffer.end(), color565ToArgb(color565));
-        requestPresent();
-    }
-
-    void Runtime::writeRect565(int16_t x,
-                               int16_t y,
-                               int16_t w,
-                               int16_t h,
-                               const uint16_t *pixels,
-                               int32_t stridePixels) noexcept
-    {
-        if (!pixels || w <= 0 || h <= 0 || stridePixels <= 0 || _framebuffer.empty())
-            return;
-
-        const int32_t dstX1 = std::max<int32_t>(0, x);
-        const int32_t dstY1 = std::max<int32_t>(0, y);
-        const int32_t dstX2 = std::min<int32_t>(_width, static_cast<int32_t>(x) + w);
-        const int32_t dstY2 = std::min<int32_t>(_height, static_cast<int32_t>(y) + h);
-        if (dstX1 >= dstX2 || dstY1 >= dstY2)
-            return;
-
-        throttleSpiTransfer(static_cast<size_t>(dstX2 - dstX1) * static_cast<size_t>(dstY2 - dstY1));
-
-        const int32_t srcOffsetX = dstX1 - x;
-        const int32_t srcOffsetY = dstY1 - y;
-
-        for (int32_t row = dstY1; row < dstY2; ++row)
-        {
-            uint32_t *dst = _framebuffer.data() + static_cast<size_t>(row) * _width + dstX1;
-            const uint16_t *src = pixels + static_cast<size_t>(srcOffsetY + (row - dstY1)) * static_cast<size_t>(stridePixels) + srcOffsetX;
-            for (int32_t col = dstX1; col < dstX2; ++col)
-                *dst++ = color565ToArgb(__builtin_bswap16(*src++));
-        }
-
-        requestPresent();
-    }
-
-    void Runtime::pumpEvents() noexcept
-    {
-        if (_window == nullptr && _baseWidth > 0 && _baseHeight > 0)
-            (void)ensureWindow();
-
-        SDL_Event event = {};
-        while (SDL_PollEvent(&event) != 0)
-        {
-            switch (event.type)
-            {
-            case SDL_QUIT:
-                _shouldQuit = true;
-                break;
-            case SDL_KEYDOWN:
-                if (event.key.repeat == 0)
-                {
-                    if (event.key.keysym.sym == SDLK_F1)
-                    {
-                        (void)restartProcess();
-                        break;
-                    }
-                    if (event.key.keysym.sym == SDLK_F2)
-                    {
-                        (void)saveScreenshot();
-                        break;
-                    }
-                    if (event.key.keysym.sym == SDLK_F3)
-                    {
-                        (void)toggleRecording();
-                        break;
-                    }
-                }
-                handleKey(event.key.keysym.sym, true);
-                break;
-            case SDL_KEYUP:
-                handleKey(event.key.keysym.sym, false);
-                break;
-            case SDL_TEXTINPUT:
-                if (event.text.text[0] >= '0' && event.text.text[0] <= '3' && event.text.text[1] == '\0')
-                    pushSerialChar(event.text.text[0]);
-                break;
-            default:
-                break;
-            }
-        }
-
-        const uint64_t nowUs = monotonicMicros();
-        serviceSimClock(nowUs);
-        if (_statusUntilUs != 0 && nowUs >= _statusUntilUs)
-        {
-            _statusUntilUs = 0;
-            _statusText.clear();
-            refreshWindowTitle();
-        }
-
-        serviceRecording(nowUs);
-        if (_dirty && (_lastPresentUs == 0 || (nowUs - _lastPresentUs) >= 16'000U))
-            presentNow();
-    }
-
-    void Runtime::pinModeInput(uint8_t pin, pipcore::InputMode mode) noexcept
-    {
-        _pinModes[pin] = mode;
-    }
-
-    bool Runtime::digitalRead(uint8_t pin) const noexcept
-    {
-        const bool pressed = pinPressed(pin);
-        switch (_pinModes[pin])
-        {
-        case pipcore::InputMode::Pullup:
-            return !pressed;
-        case pipcore::InputMode::Pulldown:
-            return pressed;
-        default:
-            return pressed;
-        }
-    }
-
-    uint32_t Runtime::nowMs() noexcept
-    {
-        pumpEvents();
-        return static_cast<uint32_t>(_simClockUs / 1000U);
-    }
-
-    uint64_t Runtime::nowMicros() noexcept
-    {
-        pumpEvents();
-        return _simClockUs;
-    }
-
-    void Runtime::delayMs(uint32_t ms) noexcept
-    {
-        const uint64_t endUs = _simClockUs + static_cast<uint64_t>(ms) * 1000U;
-        while (!shouldQuit() && _simClockUs < endUs)
-        {
-            pumpEvents();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-
-    int Runtime::serialAvailable() noexcept
-    {
-        pumpEvents();
-        return static_cast<int>(_serialInput.size() - _serialReadOffset);
-    }
-
-    int Runtime::serialRead() noexcept
-    {
-        pumpEvents();
-        if (_serialReadOffset >= _serialInput.size())
-            return -1;
-
-        const int value = static_cast<unsigned char>(_serialInput[_serialReadOffset++]);
-        if (_serialReadOffset >= _serialInput.size())
-        {
-            _serialInput.clear();
-            _serialReadOffset = 0;
-        }
-        return value;
-    }
-
-    size_t Runtime::serialWrite(const uint8_t *data, size_t len) noexcept
-    {
-        if (!data || len == 0)
-            return 0;
-
-        std::cout.write(reinterpret_cast<const char *>(data), static_cast<std::streamsize>(len));
-        std::cout.flush();
-        return len;
-    }
-
-    size_t Runtime::serialWrite(uint8_t value) noexcept
-    {
-        return serialWrite(&value, 1U);
-    }
-
-    void Runtime::serviceSimClock(uint64_t realNowUs) noexcept
-    {
-        if (_lastRealClockUs == 0)
-        {
-            _lastRealClockUs = realNowUs;
-            return;
-        }
-
-        const uint64_t realDelta = realNowUs - _lastRealClockUs;
-        _lastRealClockUs = realNowUs;
-
-        if (_pendingFrameSteps != 0)
-        {
-            --_pendingFrameSteps;
-            _simClockUs += 16'667U;
-            return;
-        }
-
-        if (!_paused)
-            _simClockUs += (realDelta * _timeScalePercent) / 100U;
-    }
-
-    void Runtime::advanceFrameStep() noexcept
-    {
-        ++_pendingFrameSteps;
-    }
-
-    void Runtime::throttleSpiTransfer(size_t pixelCount) noexcept
-    {
-        if (_spiLimitBytesPerSec == 0 || pixelCount == 0)
-            return;
-
-        const uint64_t nowUs = monotonicMicros();
-        const uint64_t bytes = pixelCount * 2U;
-        const uint64_t transferUs = (bytes * 1'000'000ULL + (_spiLimitBytesPerSec - 1U)) / _spiLimitBytesPerSec;
-        if (_spiReadyUs < nowUs)
-            _spiReadyUs = nowUs;
-        _spiReadyUs += transferUs;
-
-        while (!shouldQuit())
-        {
-            const uint64_t currentUs = monotonicMicros();
-            if (currentUs >= _spiReadyUs)
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-
-    uint32_t Runtime::presentColor(uint32_t argb) const noexcept
-    {
-        if (!_rgb565Preview)
-            return argb;
-
-        const uint8_t r = static_cast<uint8_t>((argb >> 16) & 0xFFU);
-        const uint8_t g = static_cast<uint8_t>((argb >> 8) & 0xFFU);
-        const uint8_t b = static_cast<uint8_t>(argb & 0xFFU);
-        const uint16_t c565 = static_cast<uint16_t>(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
-        return color565ToArgb(c565);
-    }
-
-    void Runtime::togglePause() noexcept
-    {
-        _paused = !_paused;
-        setTransientStatus(_paused ? "Paused" : "Running");
-    }
-
-    void Runtime::stepFrame() noexcept
-    {
-        advanceFrameStep();
-        setTransientStatus("Step frame");
-    }
-
-    void Runtime::cycleTimeScale() noexcept
-    {
-        if (_timeScalePercent == 100)
-            _timeScalePercent = 50;
-        else if (_timeScalePercent == 50)
-            _timeScalePercent = 25;
-        else if (_timeScalePercent == 25)
-            _timeScalePercent = 10;
-        else
-            _timeScalePercent = 100;
-        setTransientStatus(("Time " + std::to_string(_timeScalePercent) + "%").c_str());
-    }
-
-    void Runtime::cycleSpiLimit() noexcept
-    {
-        if (_spiLimitBytesPerSec == 0)
-            _spiLimitBytesPerSec = 40'000'000U / 8U;
-        else if (_spiLimitBytesPerSec == 40'000'000U / 8U)
-            _spiLimitBytesPerSec = 27'000'000U / 8U;
-        else if (_spiLimitBytesPerSec == 27'000'000U / 8U)
-            _spiLimitBytesPerSec = 10'000'000U / 8U;
-        else
-            _spiLimitBytesPerSec = 0;
-
-        if (_spiLimitBytesPerSec == 0)
-            setTransientStatus("SPI unlimited");
-        else
-            setTransientStatus(("SPI " + std::to_string((_spiLimitBytesPerSec * 8U) / 1'000'000U) + " MHz").c_str());
-    }
-
-    void Runtime::toggleRgb565Preview() noexcept
-    {
-        _rgb565Preview = !_rgb565Preview;
-        setTransientStatus(_rgb565Preview ? "RGB565 preview" : "RGB888 preview");
-        requestPresent();
-    }
-
-    void Runtime::toggleConsole() noexcept
-    {
-        _consoleOpen = true;
-        setTransientStatus("Console: stderr");
-        logLine("console output is available on stderr");
-    }
-
-    void Runtime::logLine(const char *message) noexcept
-    {
-        if (message)
-            std::cerr << "[sim] " << message << std::endl;
-    }
-
-    bool Runtime::ensureWindow() noexcept
-    {
-        if (_window)
-            return true;
-        if (_width == 0 || _height == 0)
-            return false;
-        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0)
-            return false;
-
-        _window = SDL_CreateWindow(_windowTitle.c_str(),
-                                   SDL_WINDOWPOS_CENTERED,
-                                   SDL_WINDOWPOS_CENTERED,
-                                   static_cast<int>(_width * _scale),
-                                   static_cast<int>(_height * _scale),
-                                   SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-        if (!_window)
-            return false;
-
-        _renderer = SDL_CreateRenderer(static_cast<SDL_Window *>(_window), -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-        if (!_renderer)
-            _renderer = SDL_CreateRenderer(static_cast<SDL_Window *>(_window), -1, SDL_RENDERER_SOFTWARE);
-        if (!_renderer)
-            return false;
-
-        _texture = SDL_CreateTexture(static_cast<SDL_Renderer *>(_renderer),
-                                     SDL_PIXELFORMAT_ARGB8888,
-                                     SDL_TEXTUREACCESS_STREAMING,
-                                     _width,
-                                     _height);
-        if (!_texture)
-            return false;
-
-        SDL_StartTextInput();
-        refreshWindowTitle();
-        return true;
-    }
-
-    void Runtime::resizeWindow() noexcept
-    {
-        if (!_window)
-            return;
-
-        if (_texture)
-        {
-            SDL_DestroyTexture(static_cast<SDL_Texture *>(_texture));
-            _texture = nullptr;
-        }
-        _texture = SDL_CreateTexture(static_cast<SDL_Renderer *>(_renderer),
-                                     SDL_PIXELFORMAT_ARGB8888,
-                                     SDL_TEXTUREACCESS_STREAMING,
-                                     _width,
-                                     _height);
-        SDL_SetWindowSize(static_cast<SDL_Window *>(_window),
-                          static_cast<int>(_width * _scale),
-                          static_cast<int>(_height * _scale));
-    }
-
-    void Runtime::updateBitmapInfo() noexcept {}
-
-    void Runtime::requestPresent() noexcept
-    {
-        _dirty = true;
-    }
-
-    void Runtime::presentNow() noexcept
-    {
-        if (!_window || !_renderer || !_texture)
-            return;
-
-        _dirty = false;
-        _lastPresentUs = monotonicMicros();
-        SDL_UpdateTexture(static_cast<SDL_Texture *>(_texture), nullptr, _framebuffer.data(), static_cast<int>(_width) * 4);
-        SDL_RenderClear(static_cast<SDL_Renderer *>(_renderer));
-        SDL_RenderCopy(static_cast<SDL_Renderer *>(_renderer), static_cast<SDL_Texture *>(_texture), nullptr, nullptr);
-        SDL_RenderPresent(static_cast<SDL_Renderer *>(_renderer));
-    }
-
-    void Runtime::serviceRecording(uint64_t nowUs) noexcept
-    {
-        if (!_recording.active)
-            return;
-
-        while (_recording.active && nowUs >= _recording.nextFrameUs)
-        {
-            if (!encodeRecordingFrame(static_cast<int64_t>(_recording.frameIndex)))
-            {
-                stopRecording();
-                setTransientStatus("Video failed");
-                break;
-            }
-
-            ++_recording.frameIndex;
-            _recording.nextFrameUs += 1'000'000ULL / _recording.fps;
-        }
-    }
-
-    bool Runtime::restartProcess() noexcept
-    {
-        char exePath[4096] = {};
-        const ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1U);
-        if (len <= 0)
-            return false;
-
-        exePath[len] = '\0';
-        const pid_t pid = fork();
-        if (pid < 0)
-            return false;
-
-        if (pid == 0)
-        {
-            execl(exePath, exePath, static_cast<char *>(nullptr));
-            _exit(127);
-        }
-
-        _shouldQuit = true;
-        return true;
-    }
-
-    bool Runtime::saveScreenshot() noexcept
-    {
-        if (_framebuffer.empty() || _width == 0 || _height == 0)
-            return false;
-
-        try
-        {
-            namespace fs = std::filesystem;
-            fs::path dir = fs::current_path() / "shots";
-            fs::create_directories(dir);
-
-            const auto now = std::chrono::system_clock::now();
-            const std::time_t tt = std::chrono::system_clock::to_time_t(now);
-            std::tm tm = {};
-            localtime_r(&tt, &tm);
-            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
-
-            char nameBuf[128];
-            std::snprintf(nameBuf,
-                          sizeof(nameBuf),
-                          "pipgui_%04d%02d%02d_%02d%02d%02d_%03lld.bmp",
-                          tm.tm_year + 1900,
-                          tm.tm_mon + 1,
-                          tm.tm_mday,
-                          tm.tm_hour,
-                          tm.tm_min,
-                          tm.tm_sec,
-                          static_cast<long long>(ms));
-
-            const fs::path outPath = dir / nameBuf;
-            std::ofstream out(outPath, std::ios::binary);
-            if (!out)
-                return false;
-
-            const uint32_t fileHeaderSize = 14;
-            const uint32_t dibHeaderSize = 40;
-            const uint32_t pixelBytes = static_cast<uint32_t>(_framebuffer.size() * sizeof(uint32_t));
-            const uint32_t fileBytes = fileHeaderSize + dibHeaderSize + pixelBytes;
-            const int32_t bmpWidth = static_cast<int32_t>(_width);
-            const int32_t topDownHeight = -static_cast<int32_t>(_height);
-            const uint16_t planes = 1;
-            const uint16_t bpp = 32;
-            const uint32_t compression = 0;
-            const uint32_t ppm = 2835;
-
-            out.write("BM", 2);
-            out.write(reinterpret_cast<const char *>(&fileBytes), sizeof(fileBytes));
-            const uint32_t reserved = 0;
-            out.write(reinterpret_cast<const char *>(&reserved), sizeof(reserved));
-            const uint32_t pixelOffset = fileHeaderSize + dibHeaderSize;
-            out.write(reinterpret_cast<const char *>(&pixelOffset), sizeof(pixelOffset));
-
-            out.write(reinterpret_cast<const char *>(&dibHeaderSize), sizeof(dibHeaderSize));
-            out.write(reinterpret_cast<const char *>(&bmpWidth), sizeof(bmpWidth));
-            out.write(reinterpret_cast<const char *>(&topDownHeight), sizeof(topDownHeight));
-            out.write(reinterpret_cast<const char *>(&planes), sizeof(planes));
-            out.write(reinterpret_cast<const char *>(&bpp), sizeof(bpp));
-            out.write(reinterpret_cast<const char *>(&compression), sizeof(compression));
-            out.write(reinterpret_cast<const char *>(&pixelBytes), sizeof(pixelBytes));
-            out.write(reinterpret_cast<const char *>(&ppm), sizeof(ppm));
-            out.write(reinterpret_cast<const char *>(&ppm), sizeof(ppm));
-            out.write(reinterpret_cast<const char *>(&reserved), sizeof(reserved));
-            out.write(reinterpret_cast<const char *>(&reserved), sizeof(reserved));
-            out.write(reinterpret_cast<const char *>(_framebuffer.data()), static_cast<std::streamsize>(pixelBytes));
-
-            if (!out)
-                return false;
-
-            setTransientStatus("Screenshot saved");
-            return true;
-        }
-        catch (...)
-        {
-            setTransientStatus("Screenshot failed");
-            return false;
-        }
-    }
-
-    bool Runtime::toggleRecording() noexcept
-    {
-        if (_recording.active)
-        {
-            stopRecording();
-            setTransientStatus("Recording stopped");
-            return true;
-        }
-
-        if (startRecording())
-        {
-            setTransientStatus("Recording started");
-            return true;
-        }
-
-        setTransientStatus("Recording failed");
-        return false;
-    }
-
-    bool Runtime::startRecording() noexcept
-    {
-        if (_recording.active || _framebuffer.empty() || _width == 0 || _height == 0)
-            return false;
-
-        try
-        {
-            namespace fs = std::filesystem;
-            fs::create_directories(fs::current_path() / "videos");
-
-            const auto now = std::chrono::system_clock::now();
-            const std::time_t tt = std::chrono::system_clock::to_time_t(now);
-            std::tm tm = {};
-            localtime_r(&tt, &tm);
-            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
-
-            char nameBuf[128];
-            std::snprintf(nameBuf,
-                          sizeof(nameBuf),
-                          "pipgui_%04d%02d%02d_%02d%02d%02d_%03lld.mp4",
-                          tm.tm_year + 1900,
-                          tm.tm_mon + 1,
-                          tm.tm_mday,
-                          tm.tm_hour,
-                          tm.tm_min,
-                          tm.tm_sec,
-                          static_cast<long long>(ms));
-
-            const fs::path outPath = fs::current_path() / "videos" / nameBuf;
-            std::string command = "ffmpeg -hide_banner -loglevel error -y -f rawvideo -pix_fmt bgra -s ";
-            command += std::to_string(_width);
-            command += "x";
-            command += std::to_string(_height);
-            command += " -r 30 -i - -an -c:v libx264 -pix_fmt yuv420p -movflags +faststart ";
-            command += shellQuote(outPath.string());
-
-            std::signal(SIGPIPE, SIG_IGN);
-            FILE *pipe = popen(command.c_str(), "w");
-            if (!pipe)
-                return false;
-
-            _recordPipe = pipe;
-            _recording.fps = 30;
-            _recording.frameDuration = 1;
-            _recording.frameIndex = 0;
-            _recording.nextFrameUs = monotonicMicros();
-            _recording.active = true;
-            refreshWindowTitle();
-            return true;
-        }
-        catch (...)
-        {
-            return false;
-        }
-    }
-
-    void Runtime::stopRecording() noexcept
-    {
-        if (!_recording.active)
-            return;
-
-        if (_recordPipe)
-        {
-            FILE *pipe = static_cast<FILE *>(_recordPipe);
-            std::fflush(pipe);
-            pclose(pipe);
-            _recordPipe = nullptr;
-        }
-
-        _recording = {};
-        refreshWindowTitle();
-    }
-
-    bool Runtime::encodeRecordingFrame(int64_t) noexcept
-    {
-        if (!_recording.active || !_recordPipe || _framebuffer.empty())
-            return false;
-
-        FILE *pipe = static_cast<FILE *>(_recordPipe);
-        const size_t written = std::fwrite(_framebuffer.data(), sizeof(uint32_t), _framebuffer.size(), pipe);
-        return written == _framebuffer.size();
-    }
-
-    void Runtime::setTransientStatus(const char *message, uint32_t durationMs) noexcept
-    {
-        _statusText = message ? message : "";
-        _statusUntilUs = monotonicMicros() + static_cast<uint64_t>(durationMs) * 1000ULL;
-        refreshWindowTitle();
-    }
-
-    void Runtime::refreshWindowTitle() noexcept
-    {
-        if (!_window)
-            return;
-
-        std::string title = _windowTitle;
-        title += _paused ? "  |  PAUSE" : "  |  RUN";
-        if (_timeScalePercent != 100)
-            title += "  |  " + std::to_string(_timeScalePercent) + "%";
-        if (_spiLimitBytesPerSec != 0)
-            title += "  |  SPI " + std::to_string((_spiLimitBytesPerSec * 8U) / 1'000'000U) + "MHz";
-        if (_rgb565Preview)
-            title += "  |  RGB565";
-        if (_recording.active)
-            title += "  |  REC";
-        if (!_statusText.empty())
-        {
-            title += "  |  ";
-            title += _statusText;
-        }
-        SDL_SetWindowTitle(static_cast<SDL_Window *>(_window), title.c_str());
-    }
-
-    void Runtime::handleKey(int key, bool down) noexcept
-    {
-        switch (key)
-        {
-        case SDLK_LEFT:
-        case SDLK_a:
-            _prevDown = down;
-            break;
-        case SDLK_RIGHT:
-        case SDLK_d:
-            _nextDown = down;
-            break;
-        case SDLK_RETURN:
-        case SDLK_SPACE:
-            _selectDown = down;
-            break;
-        case SDLK_F4:
-            if (down)
-                togglePause();
-            break;
-        case SDLK_F5:
-            if (down)
-                stepFrame();
-            break;
-        case SDLK_F6:
-            if (down)
-                toggleRgb565Preview();
-            break;
-        case SDLK_F7:
-            if (down)
-                cycleSpiLimit();
-            break;
-        case SDLK_F8:
-            if (down)
-                cycleTimeScale();
-            break;
-        case SDLK_F9:
-            if (down)
-                toggleConsole();
             break;
         default:
             break;
@@ -3127,7 +1558,6 @@ namespace pipcore::desktop
         const uint8_t r5 = static_cast<uint8_t>((color565 >> 11) & 0x1Fu);
         const uint8_t g6 = static_cast<uint8_t>((color565 >> 5) & 0x3Fu);
         const uint8_t b5 = static_cast<uint8_t>(color565 & 0x1Fu);
-
         const uint8_t r8 = static_cast<uint8_t>((r5 * 255U + 15U) / 31U);
         const uint8_t g8 = static_cast<uint8_t>((g6 * 255U + 31U) / 63U);
         const uint8_t b8 = static_cast<uint8_t>((b5 * 255U + 15U) / 31U);
@@ -3135,4 +1565,6 @@ namespace pipcore::desktop
     }
 }
 
+#else
+#error "Desktop simulator requires PIPGUI_SIM_USE_WX. Use Tools/Simulator to build the wxWidgets simulator."
 #endif

@@ -4,16 +4,6 @@
 
 #if PIPCORE_TARGET_DESKTOP
 
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#endif
-
 #include <PipCore/Platform.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -24,6 +14,7 @@ namespace pipcore::desktop
 {
     class WxSimCanvas;
     class WxSimFrame;
+    class WxMetricsPanel;
 
     class Runtime final
     {
@@ -94,6 +85,8 @@ namespace pipcore::desktop
         void setTransientStatus(const char *message, uint32_t durationMs = 1800) noexcept;
         void refreshWindowTitle() noexcept;
         void serviceSimClock(uint64_t realNowUs) noexcept;
+        void markUserExit() noexcept;
+        void markRestartRequest() noexcept;
         void advanceFrameStep() noexcept;
         void throttleSpiTransfer(size_t pixelCount) noexcept;
         [[nodiscard]] uint32_t presentColor(uint32_t argb) const noexcept;
@@ -105,40 +98,28 @@ namespace pipcore::desktop
         void toggleConsole() noexcept;
         void stepBack() noexcept;
         void logLine(const char *message) noexcept;
-#if defined(_WIN32) && !defined(PIPGUI_SIM_USE_WX)
-        void handleKey(UINT vk, bool down) noexcept;
-#else
         void handleKey(int key, bool down) noexcept;
-#endif
         void pushSerialChar(char ch) noexcept;
         [[nodiscard]] bool pinPressed(uint8_t pin) const noexcept;
-#if defined(_WIN32) && !defined(PIPGUI_SIM_USE_WX)
-        static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) noexcept;
-#endif
         [[nodiscard]] static uint32_t color565ToArgb(uint16_t color565) noexcept;
 
     private:
         friend class WxSimCanvas;
         friend class WxSimFrame;
+        friend class WxMetricsPanel;
 #if defined(PIPGUI_SIM_USE_WX)
         void *_wxApp = nullptr;
         void *_wxFrame = nullptr;
         void *_wxCanvas = nullptr;
+        void *_wxMetrics = nullptr;
         void *_wxLog = nullptr;
         void *_wxEventLoop = nullptr;
         void *_recordPipe = nullptr;
 #if defined(_WIN32)
         void *_recordProcess = nullptr;
 #endif
-#elif defined(_WIN32)
-        HWND _hwnd = nullptr;
-        HINSTANCE _instance = nullptr;
-        BITMAPINFO _bitmapInfo = {};
 #else
-        void *_window = nullptr;
-        void *_renderer = nullptr;
-        void *_texture = nullptr;
-        void *_recordPipe = nullptr;
+#error "Desktop simulator requires PIPGUI_SIM_USE_WX. Use Tools/Simulator to build the wxWidgets simulator."
 #endif
         std::string _windowTitle;
 
@@ -157,6 +138,7 @@ namespace pipcore::desktop
         uint64_t _simClockUs = 0;
         uint64_t _spiReadyUs = 0;
         uint64_t _statusUntilUs = 0;
+        uint64_t _lastHistoryCaptureUs = 0;
         std::string _statusText;
         uint32_t _timeScalePercent = 100;
         uint32_t _spiLimitBytesPerSec = 0;
@@ -165,7 +147,15 @@ namespace pipcore::desktop
         uint64_t _drawCallCount = 0;
         uint64_t _pixelWriteCount = 0;
         uint64_t _presentFrameCount = 0;
+        uint64_t _framePixelWriteCount = 0;
+        uint64_t _frameCpuStartUs = 0;
+        uint64_t _lastRedrawnPixels = 0;
+        uint64_t _lastRenderCpuUs = 0;
+        uint64_t _lastEstimatedSpiUs = 0;
+        uint32_t _simHeapBytes = 0;
+        uint32_t _simHeapPeakBytes = 0;
         bool _spiLimitEnabled = false;
+        bool _restartRequested = false;
         bool _paused = false;
         bool _rgb565Preview = false;
         bool _consoleOpen = false;
@@ -174,6 +164,7 @@ namespace pipcore::desktop
         struct RecordingState
         {
             void *writer = nullptr;
+            uint64_t startedUs = 0;
             uint32_t streamIndex = 0;
             uint64_t nextFrameUs = 0;
             uint64_t frameIndex = 0;
