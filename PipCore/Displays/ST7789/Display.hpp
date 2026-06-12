@@ -13,6 +13,8 @@ namespace pipcore::st7789
     class Display final : public pipcore::Display
     {
     public:
+        static inline constexpr size_t StageTargetPixels = 4096;
+
         Display() = default;
         ~Display() override;
 
@@ -30,11 +32,7 @@ namespace pipcore::st7789
                                      bool invert = true,
                                      bool swap = false,
                                      int16_t xOffset = 0,
-                                     int16_t yOffset = 0)
-        {
-            _platform = platform;
-            return _drv.configure(transport, width, height, order, invert, swap, xOffset, yOffset);
-        }
+                                     int16_t yOffset = 0);
 
         [[nodiscard]] bool begin(uint8_t rotation) override { return _drv.begin(rotation); }
         [[nodiscard]] bool setRotation(uint8_t rotation) override { return _drv.setRotation(rotation); }
@@ -53,6 +51,18 @@ namespace pipcore::st7789
                           int16_t h,
                           const uint16_t *pixels,
                           int32_t stridePixels) override;
+
+        void writeRect565Async(int16_t x,
+                               int16_t y,
+                               int16_t w,
+                               int16_t h,
+                               const uint16_t *pixels,
+                               int32_t stridePixels) override;
+
+        void waitDMA() override { (void)_drv.waitComplete(); }
+
+    private:
+        void freeLineBuf() noexcept;
 
     private:
         pipcore::Platform *_platform = nullptr;

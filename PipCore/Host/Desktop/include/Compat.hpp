@@ -273,11 +273,6 @@ extern EspCompat ESP;
     return static_cast<unsigned long>(pipcore::desktop::Runtime::instance().nowMicros());
 }
 
-inline void delay(unsigned long ms) noexcept
-{
-    pipcore::desktop::Runtime::instance().delayMs(static_cast<uint32_t>(ms));
-}
-
 template <typename T>
 [[nodiscard]] constexpr const T &min(const T &a, const T &b) noexcept
 {
@@ -289,5 +284,25 @@ template <typename T>
 {
     return (a < b) ? b : a;
 }
+
+inline void delay(unsigned long ms) noexcept
+{
+    pipcore::desktop::Runtime::instance().delayMs(static_cast<uint32_t>(ms));
+}
+
+#define INPUT 0
+#define OUTPUT 1
+#define INPUT_PULLUP 2
+#define INPUT_PULLDOWN 3
+
+#define LOW 0
+#define HIGH 1
+
+inline void pinMode(unsigned char, unsigned char) noexcept {}
+inline int digitalRead(unsigned char pin) noexcept
+{
+    return pipcore::desktop::Runtime::instance().digitalRead(pin) ? HIGH : LOW;
+}
+inline int analogRead(unsigned char) noexcept { return 0; }
 
 #endif
