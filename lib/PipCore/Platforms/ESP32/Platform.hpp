@@ -47,15 +47,7 @@ namespace pipcore::esp32
         class Platform final : public pipcore::Platform
         {
         public:
-                Platform()
-#if PIPCORE_ENABLE_AUDIO
-                    : _audio(static_cast<pipcore::audio::Backend &>(_audioBackend))
-#endif
-                {
-#if PIPCORE_ENABLE_OTA
-                        _ota.bindWifi(&_wifi);
-#endif
-                }
+                Platform();
                 ~Platform() override = default;
 
                 void pinModeInput(uint8_t pin, InputMode mode) noexcept override;
@@ -130,7 +122,6 @@ namespace pipcore::esp32
                 services::Touch _touch;
 #endif
 #if PIPCORE_ENABLE_AUDIO
-
                 services::Audio _audioBackend;
                 pipcore::Audio _audio;
 #endif
