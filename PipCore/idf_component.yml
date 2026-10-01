@@ -1,0 +1,14 @@
+version: "2.0.0"
+description: "PipCore - modular HAL kernel for ESP-IDF: display, graphics, input, audio, WiFi, OTA, storage and debug services."
+url: "https://github.com/pisppus/PipCore"
+license: "MIT"
+targets:
+  - esp32
+  - esp32s2
+  - esp32s3
+  - esp32c3
+  - esp32c6
+dependencies:
+  idf: ">=6.0"
+  joltwallet/littlefs:
+    version: ">=1.10.0,<2.0.0"

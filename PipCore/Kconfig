@@ -1,0 +1,206 @@
+menu "PipCore"
+
+    choice PIPCORE_DISPLAY
+        prompt "Display driver"
+        default PIPCORE_DISPLAY_NONE
+        help
+            Driver for an SPI display controller. All drivers share the
+            same DMA-staged SPI transport. None keeps the kernel headless;
+            no display code is compiled.
+        config PIPCORE_DISPLAY_NONE
+            bool "None (headless)"
+        config PIPCORE_DISPLAY_ST7789
+            bool "ST7789 (SPI, RGB565)"
+        config PIPCORE_DISPLAY_ST7796
+            bool "ST7796 (SPI, RGB565)"
+        config PIPCORE_DISPLAY_ILI9488
+            bool "ILI9488 (SPI, RGB666)"
+    endchoice
+
+    config PIPCORE_ENABLE_GRAPHICS
+        bool "Sprite graphics engine (offscreen RGB565)"
+        default !PIPCORE_DISPLAY_NONE
+        help
+            Sprite buffers with clipping, alpha blending and fast blits to a
+            pipcore::Display target. Follows the display choice by default
+            (headless builds skip it), but can be enabled with
+            PIPCORE_DISPLAY_NONE too - e.g. when the app provides its own
+            Display implementation. Disable to drop Graphics/Sprite.cpp and
+            Graphics/Raster.cpp from the build entirely.
+
+    config PIPCORE_ENABLE_TOUCH
+        bool "Touch input (I2C, FT6x36 family)"
+        help
+            FT6x36 capacitive touch controller on the I2C bus, up to two
+            touch points. Adds an IRAM GPIO interrupt handler and an I2C
+            master driver.
+
+    menu "Audio"
+
+        config PIPCORE_ENABLE_AUDIO
+            bool "Enable audio subsystem"
+            help
+                16-voice software mixer with the PAC decoder and an I2S
+                standard-mode output. Runs a dedicated mixer task.
+
+        config PIPCORE_AUDIO_TASK_STACK
+            int "Mixer task stack size (bytes)"
+            depends on PIPCORE_ENABLE_AUDIO
+            default 4096
+            range 1024 32768
+            help
+                Stack size of the 'PipCoreAudio' mixer task in bytes. 4096
+                is sufficient for the mixer, the PAC decoder and the I2S
+                write.
+
+        config PIPCORE_AUDIO_TASK_PRIO
+            int "Mixer task priority"
+            depends on PIPCORE_ENABLE_AUDIO
+            default 5
+            range 1 25
+            help
+                Priority of the mixer task. The task spends most of its
+                cycle blocked on the I2S write, so the default is
+                sufficient. Increase only if audio glitches under load.
+
+        config PIPCORE_AUDIO_TASK_CORE
+            int "Mixer task CPU core"
+            depends on PIPCORE_ENABLE_AUDIO
+            default 0
+            range 0 1
+            help
+                CPU core the mixer task is pinned to. Pin it opposite the
+                render loop so mixing and rendering do not contend.
+                Ignored on single-core chips, where the task runs unpinned.
+
+    endmenu
+
+    config PIPCORE_ENABLE_WIFI
+        bool "WiFi support"
+        help
+            Event-driven WiFi station client with automatic reconnect,
+            retry backoff and optional static IP.
+
+    menu "OTA update service"
+        depends on PIPCORE_ENABLE_WIFI
+
+        config PIPCORE_ENABLE_OTA
+            bool "Enable OTA updates"
+            help
+                Manifest-based firmware update service. Manifests are
+                signed with Ed25519 and verified against SHA-256 checksums.
+                The radio is active only for the duration of a transfer.
+
+        config PIPCORE_OTA_PROJECT_URL
+            string "OTA manifest project URL"
+            depends on PIPCORE_ENABLE_OTA
+            default ""
+            help
+                Base URL of the OTA server, for example
+                https://host/project. The index, release manifests and
+                stable lists are resolved relative to this URL.
+
+        config PIPCORE_OTA_HTTP_TIMEOUT_MS
+            int "OTA HTTP timeout (ms)"
+            depends on PIPCORE_ENABLE_OTA
+            default 2000
+            range 500 30000
+            help
+                Timeout in milliseconds for OTA HTTP transfers. Also bounds
+                the worst-case blocking time of one ota::service() call,
+                because HTTP reads are synchronous. Keep short when polling
+                the service from a render or UI loop.
+
+    endmenu
+
+    config PIPCORE_ENABLE_PREFS
+        bool "Preferences (NVS)"
+        help
+            Key-value settings store backed by NVS. NVS is initialized on
+            first access and is never erased.
+
+    menu "File storage"
+
+        config PIPCORE_ENABLE_STORAGE
+            bool "Enable file storage"
+            help
+                File API over a LittleFS partition, exposed through VFS.
+
+        config PIPCORE_STORAGE_PARTITION_LABEL
+            string "LittleFS partition label"
+            depends on PIPCORE_ENABLE_STORAGE
+            default "storage"
+            help
+                Label of the partition mounted as LittleFS. Must match a
+                data partition of subtype spiffs in the partition table.
+                The default matches the project partitions.csv.
+
+    endmenu
+
+    menu "Debug"
+
+        config PIPCORE_LOG_LEVEL
+            int "Log output level"
+            default 2
+            range 0 5
+            help
+                Default log level of pipcore::log. Filtering is applied at
+                runtime; output is routed to the platform log backend with
+                the mapped level. Changeable at runtime through
+                pipcore::log::setLevel().
+                Levels: 0 Verbose, 1 Debug, 2 Info, 3 Warning, 4 Error,
+                5 Off.
+
+        config PIPCORE_ENABLE_DEBUG
+            bool "Enable allocation tracker and profiler"
+            help
+                Routes global operator new/delete through the allocation
+                tracker and activates the PIP_PROFILE_* profiling macros.
+
+        config PIPCORE_DEBUG_CONSOLE
+            bool "Enable debug console (PipCore Inspector)"
+            depends on PIPCORE_ENABLE_DEBUG
+            help
+                Serial debug console with an ASCII line protocol, paired
+                with the PipCore Inspector desktop tool.
+
+        config PIPCORE_DEBUG_CONSOLE_ACCEPT_RISK
+            bool "Allow unauthenticated console access"
+            default n
+            depends on PIPCORE_DEBUG_CONSOLE
+            warning "The debug console has no authentication; never enable it in production."
+            help
+                The console performs no authentication. Anyone with serial
+                access can read the entire flash (READ_FLASH), dump all NVS
+                entries (GET_NVS) and download, overwrite or delete files
+                on the storage partition (GET_FILE, WRITE_CHUNK,
+                DELETE_FILE). The kernel refuses to compile until this
+                option is set. Never enable it in production.
+
+        config PIPCORE_DEBUG_CONSOLE_STACK
+            int "Debug console task stack size (bytes)"
+            depends on PIPCORE_DEBUG_CONSOLE
+            default 4096
+            range 1024 32768
+            help
+                Stack size of the 'PipCoreConsole' task in bytes. Responses
+                are rendered as JSON (partitions, NVS, profile) into a
+                512-byte printf buffer.
+
+        choice PIPCORE_DEBUG_TRANSPORT
+            prompt "Debug console transport"
+            depends on PIPCORE_DEBUG_CONSOLE
+            default PIPCORE_DEBUG_TRANSPORT_USJ
+            help
+                Transport used by the debug console. USB Serial/JTAG is
+                available on ESP32-S3 and the ESP32-C series; the original
+                ESP32 and ESP32-S2 require UART0.
+            config PIPCORE_DEBUG_TRANSPORT_USJ
+                bool "USB Serial/JTAG"
+            config PIPCORE_DEBUG_TRANSPORT_UART0
+                bool "UART0"
+        endchoice
+
+    endmenu
+
+endmenu

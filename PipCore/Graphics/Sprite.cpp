@@ -1,12 +1,16 @@
-﻿#include <PipCore/Graphics/Sprite.hpp>
-#include <PipCore/Display.hpp>
-#include <PipCore/Platform.hpp>
-#include <cstring>
 #include <algorithm>
+#include <cstring>
+
+#include <Sprite.hpp>
+#include <Display.hpp>
+#include <Platform.hpp>
 
 namespace pipcore
 {
-    Sprite::~Sprite() { deleteSprite(); }
+    Sprite::~Sprite()
+    {
+        deleteSprite();
+    }
 
     bool Sprite::createSprite(int16_t w, int16_t h)
     {
@@ -14,15 +18,15 @@ namespace pipcore
         if (w <= 0 || h <= 0)
             return false;
 
-        if (Platform *const plat = platform(); !plat)
+        Platform *const plat = platform();
+        if (!plat)
             return false;
-        else
-        {
-            const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
-            if (pixels > SIZE_MAX / sizeof(uint16_t))
-                return false;
-            _buf = static_cast<uint16_t *>(plat->alloc(pixels * sizeof(uint16_t), AllocCaps::Default));
-        }
+
+        const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
+        if (pixels > SIZE_MAX / sizeof(uint16_t))
+            return false;
+
+        _buf = static_cast<uint16_t *>(plat->alloc(pixels * sizeof(uint16_t), AllocCaps::Default));
         if (!_buf)
             return false;
 
@@ -97,7 +101,7 @@ namespace pipcore
             *h = _clipH;
     }
 
-    void Sprite::pushSprite(Sprite *dst, int16_t x, int16_t y) const
+    PIPCORE_HOT void Sprite::pushSprite(Sprite *dst, int16_t x, int16_t y) const noexcept
     {
         if (!dst || !_buf || !dst->_buf || _clipW <= 0 || _clipH <= 0 || dst->_clipW <= 0 || dst->_clipH <= 0)
             return;
@@ -131,8 +135,7 @@ namespace pipcore
         {
             if (contiguous)
             {
-                memmove(dst->_buf + static_cast<size_t>(y1) * dst->_w,
-                        _buf + static_cast<size_t>(srcY) * _w,
+                memmove(dst->_buf + static_cast<size_t>(y1) * dst->_w, _buf + static_cast<size_t>(srcY) * _w,
                         static_cast<size_t>(ch) * bytes);
                 return;
             }
@@ -165,8 +168,7 @@ namespace pipcore
 
         if (contiguous)
         {
-            memcpy(dst->_buf + static_cast<size_t>(y1) * dst->_w,
-                   _buf + static_cast<size_t>(srcY) * _w,
+            memcpy(dst->_buf + static_cast<size_t>(y1) * dst->_w, _buf + static_cast<size_t>(srcY) * _w,
                    static_cast<size_t>(ch) * bytes);
             return;
         }
@@ -182,7 +184,7 @@ namespace pipcore
         }
     }
 
-    void Sprite::writeToDisplay(Display &display, int16_t x, int16_t y, int16_t w, int16_t h) const
+    PIPCORE_HOT void Sprite::writeToDisplay(Display &display, int16_t x, int16_t y, int16_t w, int16_t h) const
     {
         if (!_buf || w <= 0 || h <= 0)
             return;
@@ -197,11 +199,7 @@ namespace pipcore
         if (cw <= 0 || ch <= 0)
             return;
 
-        display.writeRect565(static_cast<int16_t>(x1),
-                             static_cast<int16_t>(y1),
-                             static_cast<int16_t>(cw),
-                             static_cast<int16_t>(ch),
-                             _buf + (static_cast<size_t>(y1) * _w + x1),
-                             _w);
+        display.writeRect565(static_cast<int16_t>(x1), static_cast<int16_t>(y1), static_cast<int16_t>(cw),
+                             static_cast<int16_t>(ch), _buf + (static_cast<size_t>(y1) * _w + x1), _w);
     }
 }
