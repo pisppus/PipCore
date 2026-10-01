@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./README/hero.png" alt="PipCore Library" width="100%">
+  <img src="./README/Hero.png" alt="PipCore Library" width="100%">
 </p>
 
 <p align="center">
@@ -9,7 +9,13 @@
 
 PipCore is a lightweight, high-performance hardware abstraction layer (HAL) and system kernel designed specifically for microcontrollers.
 
-The kernel provides efficient platform access, GPIO support, and backlight control via LEDC PWM. It includes an asynchronous dual-buffer DMA driver for displays. The sprite engine supports mask clipping, fast 32-bit operations with hardware byte swapping, and software alpha blending in RGB565 space. Additionally, the library includes a non-blocking OTA service with manifest signature verification and SHA256 integrity checks. The built-in Windows simulator provides frame rendering, input emulation, PNG screenshot saving, and MP4 video recording.
+<p align="center">
+  <img src="./README/Architecture.png" alt="PipCore architecture" width="100%">
+</p>
+
+The kernel provides efficient platform access with GPIO and ADC support and an asynchronous dual-buffer DMA display driver for ST7789, ST7796 and ILI9488 panels. The sprite engine works directly in RGB565 space: mask clipping, fast 32-bit operations with hardware byte swapping, and software alpha blending. Input is handled by capacitive touch and analog joysticks, audio by a 16-voice software mixer playing the built-in PAC format over I2S.
+
+For storage there are LittleFS file systems and NVS-backed preferences. On the network side there is an event-driven Wi-Fi service and a non-blocking OTA updater with Ed25519 manifest signature verification and SHA256 integrity checks. The built-in Windows simulator runs the same kernel code on the desktop (frame rendering, input emulation), as well as PNG screenshots and MP4 video recording.
 
 > **Warning**
 >

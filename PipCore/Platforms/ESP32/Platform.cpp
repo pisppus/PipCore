@@ -1,7 +1,33 @@
-#include <PipCore/Platforms/ESP32/Platform.hpp>
+#include <cstddef>
+#include <cstdlib>
+#include <new>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "Platforms/ESP32/Platform.hpp"
+#if PIPCORE_ENABLE_DEBUG
+#include "Platforms/ESP32/Core/Alloc.hpp"
+#endif
+#if PIPCORE_DEBUG_CONSOLE
+#include "Platforms/ESP32/Debug/Console.hpp"
+#endif
 
 namespace pipcore::esp32
 {
+    Platform::Platform()
+#if PIPCORE_ENABLE_AUDIO
+        : _audio(static_cast<pipcore::audio::Backend &>(_audioBackend))
+#endif
+    {
+#if PIPCORE_ENABLE_OTA
+        _ota.bindWifi(&_wifi);
+#endif
+#if PIPCORE_DEBUG_CONSOLE
+        pipcore::debug::Console::instance().begin();
+#endif
+    }
+
     void Platform::pinModeInput(uint8_t pin, InputMode mode) noexcept
     {
         _gpio.pinModeInput(pin, mode);
@@ -17,11 +43,6 @@ namespace pipcore::esp32
         return _gpio.analogRead(pin);
     }
 
-    void Platform::configureBacklightPin(uint8_t pin, uint8_t channel, uint32_t freqHz, uint8_t resolutionBits, bool activeLow) noexcept
-    {
-        _backlight.configurePin(pin, channel, freqHz, resolutionBits, activeLow);
-    }
-
     uint32_t Platform::nowMs() noexcept
     {
         return _time.nowMs();
@@ -32,40 +53,9 @@ namespace pipcore::esp32
         return _time.nowUs();
     }
 
-    uint8_t Platform::loadMaxBrightnessPercent() noexcept
+    void Platform::delayMs(uint32_t ms) noexcept
     {
-#if PIPCORE_ENABLE_PREFS
-        uint8_t percent = 100;
-        if (!_prefs.loadMaxBrightnessPercent(percent))
-        {
-            _lastError = PlatformError::PrefsOpenFailed;
-            return 100;
-        }
-        _lastError = PlatformError::None;
-        return percent;
-#else
-        _lastError = PlatformError::None;
-        return 100;
-#endif
-    }
-
-    void Platform::storeMaxBrightnessPercent(uint8_t percent) noexcept
-    {
-#if PIPCORE_ENABLE_PREFS
-        if (!_prefs.storeMaxBrightnessPercent(percent))
-        {
-            _lastError = PlatformError::PrefsOpenFailed;
-            return;
-        }
-#else
-        (void)percent;
-#endif
-        _lastError = PlatformError::None;
-    }
-
-    void Platform::setBacklightPercent(uint8_t percent) noexcept
-    {
-        _backlight.setPercent(percent);
+        vTaskDelay(pdMS_TO_TICKS(ms));
     }
 
     void *Platform::alloc(size_t bytes, AllocCaps caps) noexcept
@@ -88,6 +78,7 @@ namespace pipcore::esp32
         _heap.freeAligned(ptr);
     }
 
+#if PIPCORE_HAS_DISPLAY
     bool Platform::configDisplay(const DisplayConfig &cfg) noexcept
     {
         _lastError = PlatformError::None;
@@ -100,9 +91,11 @@ namespace pipcore::esp32
         }
 
         _display.reset();
-        _transport.configure(cfg.mosi, cfg.sclk, cfg.cs, cfg.dc, cfg.rst, cfg.hz);
+        _transport.deinit();
+        _transport.configure(cfg.mosi, cfg.sclk, cfg.cs, cfg.dc, cfg.rst, cfg.hz, kSpiMode);
 
-        const bool ok = _display.configure(this, &_transport, cfg.width, cfg.height, cfg.order, cfg.invert, cfg.swap, cfg.xOffset, cfg.yOffset);
+        const bool ok = _display.configure(this, &_transport, cfg.width, cfg.height, cfg.order, cfg.invert, cfg.swap,
+                                           cfg.xOffset, cfg.yOffset);
         if (!ok)
         {
             _lastError = PlatformError::DisplayConfigureFailed;
@@ -157,6 +150,7 @@ namespace pipcore::esp32
             return nullptr;
         return &_display;
     }
+#endif
 
     uint32_t Platform::freeHeapTotal() noexcept
     {
@@ -180,69 +174,90 @@ namespace pipcore::esp32
 
     PlatformError Platform::lastError() const noexcept
     {
-        if (_lastError != PlatformError::None)
-            return _lastError;
-
-        return _display.ioOk() ? PlatformError::None : PlatformError::DisplayIoFailed;
+#if PIPCORE_HAS_DISPLAY
+        if (_lastError == PlatformError::None && !_display.ioOk())
+            return PlatformError::DisplayIoFailed;
+#endif
+        return _lastError;
     }
 
     const char *Platform::lastErrorText() const noexcept
     {
-        if (_lastError == PlatformError::DisplayConfigureFailed ||
-            _lastError == PlatformError::DisplayBeginFailed ||
-            _lastError == PlatformError::DisplayIoFailed)
-        {
-            if (!_display.ioOk())
-                return _display.lastErrorText();
-        }
-
         if (_lastError != PlatformError::None)
             return platformErrorText(_lastError);
 
+#if PIPCORE_HAS_DISPLAY
         if (!_display.ioOk())
             return _display.lastErrorText();
-
+#endif
         return platformErrorText(PlatformError::None);
     }
 
-    uint8_t Platform::readProgmemByte(const void *addr) noexcept
-    {
-        return *static_cast<const uint8_t *>(addr);
-    }
+}
 
-    pipcore::net::Backend *Platform::network() noexcept
+namespace pipcore
+{
+    Platform *GetPlatform() noexcept
     {
-#if PIPCORE_ENABLE_WIFI
-        return &_wifi;
-#else
-        return nullptr;
-#endif
-    }
-
-    const pipcore::net::Backend *Platform::network() const noexcept
-    {
-#if PIPCORE_ENABLE_WIFI
-        return &_wifi;
-#else
-        return nullptr;
-#endif
-    }
-
-    pipcore::ota::Backend *Platform::update() noexcept
-    {
-#if PIPCORE_ENABLE_OTA
-        return &_ota;
-#else
-        return nullptr;
-#endif
-    }
-
-    const pipcore::ota::Backend *Platform::update() const noexcept
-    {
-#if PIPCORE_ENABLE_OTA
-        return &_ota;
-#else
-        return nullptr;
-#endif
+        static esp32::Platform instance;
+        return &instance;
     }
 }
+
+#if PIPCORE_ENABLE_DEBUG
+
+void *operator new(size_t size)
+{
+    if (size == 0)
+        size = 1;
+
+    void *ptr = pipcore::debug::Tracker::instance().trackMalloc(size, "std.new", __builtin_return_address(0));
+    if (!ptr)
+    {
+#if __cpp_exceptions
+        throw std::bad_alloc();
+#else
+        std::abort();
+#endif
+    }
+    return ptr;
+}
+
+void *operator new[](size_t size)
+{
+    if (size == 0)
+        size = 1;
+
+    void *ptr = pipcore::debug::Tracker::instance().trackMalloc(size, "std.new[]", __builtin_return_address(0));
+    if (!ptr)
+    {
+#if __cpp_exceptions
+        throw std::bad_alloc();
+#else
+        std::abort();
+#endif
+    }
+    return ptr;
+}
+
+void operator delete(void *ptr) noexcept
+{
+    pipcore::debug::Tracker::instance().trackFree(ptr);
+}
+
+void operator delete[](void *ptr) noexcept
+{
+    pipcore::debug::Tracker::instance().trackFree(ptr);
+}
+
+void operator delete(void *ptr, size_t) noexcept
+{
+    pipcore::debug::Tracker::instance().trackFree(ptr);
+}
+
+void operator delete[](void *ptr, size_t) noexcept
+{
+    pipcore::debug::Tracker::instance().trackFree(ptr);
+}
+
+#endif
