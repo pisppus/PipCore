@@ -1,4 +1,4 @@
-# PipCore 2.0.0 - API Reference
+# PipCore 2.1.0 - API Reference
 
 Модульное HAL-ядро для ESP-IDF: дисплей, графика, ввод, звук, WiFi, OTA, настройки, файловое хранилище и отладка. Каждый модуль включается отдельно - то, что не нужно, не попадает в прошивку.
 
@@ -29,7 +29,7 @@
 **Вариант 1 - из реестра компонентов.** В папке приложения:
 
 ```bash
-idf.py add-dependency "pisppus/PipCore^2.0.0"
+idf.py add-dependency "pisppus/PipCore^2.1.0"
 ```
 
 Компонент-менеджер сам скачает ядро и его зависимости (например, `joltwallet/littlefs`) при первой сборке - вручную ничего ставить не нужно.
@@ -53,7 +53,7 @@ idf_component_register(SRCS "main.cpp" REQUIRES PipCore)
 Все опции находятся в меню `PipCore`:
 
 ```bash
-idf.py menuconfig   →   PipCore
+idf.py menuconfig → PipCore
 ```
 
 По умолчанию **все модули выключены**: ядро собирается «headless» - только `Platform` (время, GPIO, память) и `Log`.
@@ -61,6 +61,10 @@ idf.py menuconfig   →   PipCore
 | Опция | Описание | По умолчанию |
 |---|---|---|
 | `PIPCORE_DISPLAY` | Драйвер панели: `None` / `ST7789` / `ST7796` / `ILI9488` | `None` |
+| `PIPCORE_DISPLAY_ROTATION` | Поворот панели при старте, 0…3; раздел `Display → Panel` | 1 |
+| `PIPCORE_DISPLAY_COLOR_ORDER` | Порядок цветов панели: `RGB` / `BGR` | BGR |
+| `PIPCORE_DISPLAY_INVERT` | Инверсия цветов нужна многим IPS-панелям | on |
+| `PIPCORE_DISPLAY_SWAP` | Драйвер меняет местами байты пикселей | on |
 | `PIPCORE_ENABLE_GRAPHICS` | Sprite-графика (RGB565) | on, если выбран драйвер дисплея |
 | `PIPCORE_ENABLE_TOUCH` | Ёмкостный тач семейства FT6x36 | off |
 | `PIPCORE_ENABLE_AUDIO` | 16-голосный PAC-микшер + I²S-выход | off |
@@ -81,7 +85,7 @@ idf.py menuconfig   →   PipCore
 | `PIPCORE_DEBUG_CONSOLE_STACK` | Стек таска консоли, байт (1024…32768) | 4096 |
 | `PIPCORE_DEBUG_TRANSPORT` | Транспорт консоли: `USB-Serial/JTAG` / `UART0` | USB-Serial/JTAG |
 
-> **Пины и параметры шин Kconfig не задаёт.** Они передаются в рантайме структурами `DisplayConfig`, `TouchConfig`, `SoundConfig`, `net::WifiConfig`.
+> **Пины и параметры шин Kconfig не задаёт.** Они передаются в рантайме структурами `DisplayConfig`, `TouchConfig`, `SoundConfig`, `net::WifiConfig`. Настройки самой панели (`order`, `invert`, `swap`) в `DisplayConfig` уже заполнены значениями из `Display → Panel`, поэтому приложению их задавать не нужно; `Platform::beginDisplay()` без аргумента запускает дисплей с поворотом из `menuconfig`.
 
 > **Транспорт консоли.** USB-Serial/JTAG доступен на ESP32 S и C серий; оригинальный ESP32 и ESP32-S2 требуют `UART0`.
 
@@ -97,7 +101,7 @@ idf.py menuconfig   →   PipCore
 
 | Макрос | Значение |
 |---|---|
-| `PIPCORE_VERSION` | Версия ядра (`"2.0.0"`) |
+| `PIPCORE_VERSION` | Версия ядра (`"2.1.0"`) |
 | `PIPCORE_TARGET_ESP32` / `PIPCORE_TARGET_DESKTOP` | Целевая платформа: прошивка или [симулятор](#17-симулятор) (ровно один из двух равен 1) |
 | `PIPCORE_ENABLE_GRAPHICS`, `_TOUCH`, `_AUDIO`, `_WIFI`, `_OTA`, `_PREFS`, `_STORAGE`, `_DEBUG` | Включён ли соответствующий модуль |
 | `PIPCORE_DEBUG_CONSOLE` | Включена ли отладочная консоль |

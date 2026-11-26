@@ -1,39 +1,88 @@
 menu "PipCore"
 
-    choice PIPCORE_DISPLAY
-        prompt "Display driver"
-        default PIPCORE_DISPLAY_NONE
-        help
-            Driver for an SPI display controller. All drivers share the
-            same DMA-staged SPI transport. None keeps the kernel headless;
-            no display code is compiled.
-        config PIPCORE_DISPLAY_NONE
-            bool "None (headless)"
-        config PIPCORE_DISPLAY_ST7789
-            bool "ST7789 (SPI, RGB565)"
-        config PIPCORE_DISPLAY_ST7796
-            bool "ST7796 (SPI, RGB565)"
-        config PIPCORE_DISPLAY_ILI9488
-            bool "ILI9488 (SPI, RGB666)"
-    endchoice
+    menu "Display"
 
-    config PIPCORE_ENABLE_GRAPHICS
-        bool "Sprite graphics engine (offscreen RGB565)"
-        default !PIPCORE_DISPLAY_NONE
-        help
-            Sprite buffers with clipping, alpha blending and fast blits to a
-            pipcore::Display target. Follows the display choice by default
-            (headless builds skip it), but can be enabled with
-            PIPCORE_DISPLAY_NONE too - e.g. when the app provides its own
-            Display implementation. Disable to drop Graphics/Sprite.cpp and
-            Graphics/Raster.cpp from the build entirely.
+        choice PIPCORE_DISPLAY
+            prompt "Display driver"
+            default PIPCORE_DISPLAY_NONE
+            help
+                Driver for an SPI display controller. All drivers share the
+                same DMA-staged SPI transport. None keeps the kernel headless;
+                no display code is compiled.
+            config PIPCORE_DISPLAY_NONE
+                bool "None (headless)"
+            config PIPCORE_DISPLAY_ST7789
+                bool "ST7789 (SPI, RGB565)"
+            config PIPCORE_DISPLAY_ST7796
+                bool "ST7796 (SPI, RGB565)"
+            config PIPCORE_DISPLAY_ILI9488
+                bool "ILI9488 (SPI, RGB666)"
+        endchoice
 
-    config PIPCORE_ENABLE_TOUCH
-        bool "Touch input (I2C, FT6x36 family)"
-        help
-            FT6x36 capacitive touch controller on the I2C bus, up to two
-            touch points. Adds an IRAM GPIO interrupt handler and an I2C
-            master driver.
+        menu "Panel"
+            depends on !PIPCORE_DISPLAY_NONE
+
+            config PIPCORE_DISPLAY_ROTATION
+                int "Panel rotation (0-3)"
+                range 0 3
+                default 1
+                help
+                    Rotation applied when the display starts, in 90 degree
+                    steps. Can be changed at runtime with
+                    Platform::setDisplayRotation().
+
+            choice PIPCORE_DISPLAY_COLOR_ORDER
+                prompt "Panel color order"
+                default PIPCORE_DISPLAY_ORDER_BGR
+                help
+                    Pick BGR if red and blue are swapped on your panel.
+                config PIPCORE_DISPLAY_ORDER_RGB
+                    bool "RGB"
+                config PIPCORE_DISPLAY_ORDER_BGR
+                    bool "BGR"
+            endchoice
+
+            config PIPCORE_DISPLAY_INVERT
+                bool "Invert panel colors"
+                default y
+                help
+                    Many IPS panels need inverted colors to show the right ones.
+                    Turn it off if the picture looks like a photo negative.
+
+            config PIPCORE_DISPLAY_SWAP
+                bool "Swap pixel bytes for the panel"
+                default y
+                help
+                    Pixels are kept as native little-endian RGB565, while SPI
+                    panels expect big-endian bytes. With this on, the driver
+                    swaps the bytes on the way out. Turn it off if your code
+                    already hands the driver big-endian pixels, for example
+                    because it swaps them itself with a faster routine.
+
+        endmenu
+
+        config PIPCORE_ENABLE_GRAPHICS
+            bool "Sprite graphics engine (offscreen RGB565)"
+            default !PIPCORE_DISPLAY_NONE
+            help
+                Sprite buffers with clipping, alpha blending and fast blits to a
+                pipcore::Display target. Follows the display choice by default
+                (headless builds skip it), but can be enabled with
+                PIPCORE_DISPLAY_NONE too - e.g. when the app provides its own
+                Display implementation.
+
+    endmenu
+
+    menu "Input"
+
+        config PIPCORE_ENABLE_TOUCH
+            bool "Touch input (I2C, FT6x36 family)"
+            help
+                FT6x36 capacitive touch controller on the I2C bus, up to two
+                touch points. Adds an IRAM GPIO interrupt handler and an I2C
+                master driver.
+
+    endmenu
 
     menu "Audio"
 
@@ -75,51 +124,55 @@ menu "PipCore"
 
     endmenu
 
-    config PIPCORE_ENABLE_WIFI
-        bool "WiFi support"
-        help
-            Event-driven WiFi station client with automatic reconnect,
-            retry backoff and optional static IP.
+    menu "Network"
 
-    menu "OTA update service"
-        depends on PIPCORE_ENABLE_WIFI
-
-        config PIPCORE_ENABLE_OTA
-            bool "Enable OTA updates"
+        config PIPCORE_ENABLE_WIFI
+            bool "WiFi support"
             help
-                Manifest-based firmware update service. Manifests are
-                signed with Ed25519 and verified against SHA-256 checksums.
-                The radio is active only for the duration of a transfer.
+                Event-driven WiFi station client with automatic reconnect,
+                retry backoff and optional static IP.
 
-        config PIPCORE_OTA_PROJECT_URL
-            string "OTA manifest project URL"
-            depends on PIPCORE_ENABLE_OTA
-            default ""
-            help
-                Base URL of the OTA server, for example
-                https://host/project. The index, release manifests and
-                stable lists are resolved relative to this URL.
+        menu "OTA update service"
+            depends on PIPCORE_ENABLE_WIFI
 
-        config PIPCORE_OTA_HTTP_TIMEOUT_MS
-            int "OTA HTTP timeout (ms)"
-            depends on PIPCORE_ENABLE_OTA
-            default 2000
-            range 500 30000
-            help
-                Timeout in milliseconds for OTA HTTP transfers. Also bounds
-                the worst-case blocking time of one ota::service() call,
-                because HTTP reads are synchronous. Keep short when polling
-                the service from a render or UI loop.
+            config PIPCORE_ENABLE_OTA
+                bool "Enable OTA updates"
+                help
+                    Manifest-based firmware update service. Manifests are
+                    signed with Ed25519 and verified against SHA-256 checksums.
+                    The radio is active only for the duration of a transfer.
+
+            config PIPCORE_OTA_PROJECT_URL
+                string "OTA manifest project URL"
+                depends on PIPCORE_ENABLE_OTA
+                default ""
+                help
+                    Base URL of the OTA server, for example
+                    https://host/project. The index, release manifests and
+                    stable lists are resolved relative to this URL.
+
+            config PIPCORE_OTA_HTTP_TIMEOUT_MS
+                int "OTA HTTP timeout (ms)"
+                depends on PIPCORE_ENABLE_OTA
+                default 2000
+                range 500 30000
+                help
+                    Timeout in milliseconds for OTA HTTP transfers. Also bounds
+                    the worst-case blocking time of one ota::service() call,
+                    because HTTP reads are synchronous. Keep short when polling
+                    the service from a render or UI loop.
+
+        endmenu
 
     endmenu
 
-    config PIPCORE_ENABLE_PREFS
-        bool "Preferences (NVS)"
-        help
-            Key-value settings store backed by NVS. NVS is initialized on
-            first access and is never erased.
+    menu "Storage"
 
-    menu "File storage"
+        config PIPCORE_ENABLE_PREFS
+            bool "Preferences (NVS)"
+            help
+                Key-value settings store backed by NVS. NVS is initialized on
+                first access and is never erased.
 
         config PIPCORE_ENABLE_STORAGE
             bool "Enable file storage"
@@ -133,7 +186,6 @@ menu "PipCore"
             help
                 Label of the partition mounted as LittleFS. Must match a
                 data partition of subtype spiffs in the partition table.
-                The default matches the project partitions.csv.
 
     endmenu
 

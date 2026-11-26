@@ -82,9 +82,9 @@ namespace pipcore
         uint16_t width = 0;
         uint16_t height = 0;
         uint32_t hz = 0;
-        uint8_t order = 0;
-        bool invert = true;
-        bool swap = false;
+        uint8_t order = PIPCORE_DISPLAY_ORDER;
+        bool invert = PIPCORE_DISPLAY_INVERT;
+        bool swap = PIPCORE_DISPLAY_SWAP;
         int16_t xOffset = 0;
         int16_t yOffset = 0;
     };
@@ -113,6 +113,7 @@ namespace pipcore
         [[nodiscard]] virtual bool configDisplay(const DisplayConfig &) noexcept { return false; }
 
         [[nodiscard]] virtual bool beginDisplay(uint8_t) noexcept { return false; }
+        [[nodiscard]] bool beginDisplay() noexcept { return beginDisplay(static_cast<uint8_t>(PIPCORE_DISPLAY_ROTATION)); }
 
         [[nodiscard]] virtual bool setDisplayRotation(uint8_t) noexcept { return false; }
 

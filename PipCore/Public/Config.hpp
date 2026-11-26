@@ -1,6 +1,6 @@
 #pragma once
 
-#define PIPCORE_VERSION "2.0.0"
+#define PIPCORE_VERSION "2.1.0"
 
 #include <cstddef>
 #include <cstdint>
@@ -93,6 +93,38 @@ namespace pipcore::detail
 #define PIPCORE_DISPLAY SIMULATOR
 #else
 #define PIPCORE_DISPLAY NONE
+#endif
+#endif
+
+#ifndef PIPCORE_DISPLAY_ROTATION
+#ifdef CONFIG_PIPCORE_DISPLAY_ROTATION
+#define PIPCORE_DISPLAY_ROTATION CONFIG_PIPCORE_DISPLAY_ROTATION
+#else
+#define PIPCORE_DISPLAY_ROTATION 1
+#endif
+#endif
+
+#ifndef PIPCORE_DISPLAY_ORDER
+#ifdef CONFIG_PIPCORE_DISPLAY_ORDER_RGB
+#define PIPCORE_DISPLAY_ORDER 0
+#else
+#define PIPCORE_DISPLAY_ORDER 1
+#endif
+#endif
+
+#ifndef PIPCORE_DISPLAY_INVERT
+#if defined(CONFIG_PIPCORE_DISPLAY_INVERT) || !defined(ESP_PLATFORM)
+#define PIPCORE_DISPLAY_INVERT true
+#else
+#define PIPCORE_DISPLAY_INVERT false
+#endif
+#endif
+
+#ifndef PIPCORE_DISPLAY_SWAP
+#if defined(CONFIG_PIPCORE_DISPLAY_SWAP) || !defined(ESP_PLATFORM)
+#define PIPCORE_DISPLAY_SWAP true
+#else
+#define PIPCORE_DISPLAY_SWAP false
 #endif
 #endif
 
